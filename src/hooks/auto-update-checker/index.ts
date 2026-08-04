@@ -4,7 +4,6 @@ import {
   ensureCompanionVersion,
   loadCompanionManifestFromPackageRoot,
 } from '../../companion/updater';
-import { TOAST_DURATION_MS } from '../../config/constants';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import {
@@ -435,7 +434,7 @@ function showToast(
   title: string,
   message: string,
   variant: 'info' | 'success' | 'error' = 'info',
-  duration = TOAST_DURATION_MS,
+  duration = 3000,
 ): void {
   ctx.client.tui
     .showToast({

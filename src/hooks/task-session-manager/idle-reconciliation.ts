@@ -43,8 +43,12 @@ export function createIdleReconciler(options: {
       if (!options.isCurrentContinuation(parentSessionID, sessionToken)) {
         return;
       }
+      const hadTerminalUnreconciled =
+        options.backgroundJobBoard.hasTerminalUnreconciled(parentSessionID);
       options.reconcileInjectedTerminalJobs(parentSessionID);
-      void options.evaluateContinuation(parentSessionID, sessionToken);
+      if (!hadTerminalUnreconciled) {
+        void options.evaluateContinuation(parentSessionID, sessionToken);
+      }
     }, options.idleReconcileDelayMs).unref?.();
     idleReconcileTimers.set(parentSessionID, timer);
   }

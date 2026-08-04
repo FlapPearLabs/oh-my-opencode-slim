@@ -1,49 +1,25 @@
 /**
- * Regression coverage for the retained-board replay bug that produced
+ * Regression coverage for the latest board injection strategy and the
  * `AI_InvalidPromptError: Invalid prompt: The messages do not match the
- * ModelMessage[] schema.` in a long-running session driving background
- * subagents (commit 208b656, also present in upstream PR #889).
+ * ModelMessage[] schema.` failure it must never reintroduce.
  *
- * ── What went wrong ──────────────────────────────────────────────────────
- *
- * `replayRetainedTailBoards` reproduced a board that had been placed on an
- * ASSISTANT tail by splicing a synthetic message directly after that anchor:
- *
- *     const index = messages.indexOf(anchor);
- *     const boardMessage = { info: { ...anchor.info, id: ... }, parts: [...] };
- *     messages.splice(index + 1, 0, boardMessage);
- *
- * `anchor.info` is an ASSISTANT message info, so the synthetic board message
- * inherited `role: 'assistant'`. The host's conversion pipeline treats the two
- * roles asymmetrically (verified against the shipped opencode binary,
- * `MessageV2.toModelMessagesEffect`):
- *
- *   - the USER branch emits `{ type: 'text', text }` and DISCARDS `metadata`;
- *   - the ASSISTANT branch emits
- *     `{ type: 'text', text, providerMetadata: part.metadata }`, which
- *     `convertToModelMessages` forwards as `providerOptions`.
- *
- * `providerOptions` is validated as `Record<string, Record<string, JSONValue>>`.
- * A board part's metadata is `{ 'oh-my-opencode-slim.backgroundJobBoard': true }`
- * — a boolean where a nested record is required — so the request failed schema
- * validation before the HTTP call. This is why the failure only appeared in
- * sessions with assistant tails (a finishing background `task` turn), only
- * after 208b656 introduced `retainedTailBoards`, and never showed up in
- * storage: the malformed message is produced in-memory by the transform.
+ * `latest` strips every previously tagged board occurrence, then appends one
+ * fresh synthetic board message at the absolute end. That placement keeps the
+ * board out of historical tool-call/tool-result pairs and uses a user-role
+ * message, whose conversion path does not forward the board marker metadata as
+ * invalid assistant provider options.
  *
  * ── Invariants now enforced ──────────────────────────────────────────────
  *
  *  A1  a synthetic board MESSAGE is only ever appended at the END of the array,
  *      never spliced into the middle.
  *  A2  no injected message separates a tool_call from its matching tool_result.
- *  A3  board text only ever rides on a `user`-role message (the rule that
- *      actually prevents the error above).
- *  A4  a board on a still-present user anchor is replayed byte-identically, so
- *      already-cached bytes never change.
- *  A5  a retained board that cannot be safely replayed is DROPPED from the
- *      retained map rather than reproduced.
+ *  A3  board text only ever rides on a `user`-role message.
+ *  A4  a prior board is stripped and replaced by one current trailing board;
+ *      boards are never retained on historical anchors.
+ *  A5  repeated transforms do not accumulate synthetic board messages.
  *
- * The reproduction test validates against a transcription of the REAL
+ * The reproduction tests validate against a transcription of the REAL
  * `ModelMessage[]` zod schema together with a port of the host's conversion
  * pipeline, both extracted from the installed opencode binary. The `ai` package
  * is not a dependency of this repo and none was added, so the schema is
@@ -556,10 +532,8 @@ describe('board injection keeps the ModelMessage[] array valid', () => {
     assertAllInvariants(outA);
 
     // Request 2 — the loop advanced: the assistant task turn is now
-    // mid-history, followed by the user tool_result turn. The buggy build
-    // replayed the retained board by splicing an ASSISTANT-role synthetic
-    // message directly after the anchor, which both landed mid-array and
-    // carried board metadata on an assistant message.
+    // mid-history, followed by the user tool_result turn. latest strips any
+    // prior board and correctly leaves this tool-result-only tail board-free.
     board.updateStatus({
       taskID: CHILD,
       state: 'completed',
@@ -581,11 +555,11 @@ describe('board injection keeps the ModelMessage[] array valid', () => {
     assertAllInvariants(outB);
 
     // Request 3 — a consecutive request over the same history must stay valid
-    // and must not accumulate boards.
+    // and must not accumulate or resurrect a board.
     const outC = await request(hook, historyB);
     expect(validateModelMessages(outC).success).toBe(true);
     assertAllInvariants(outC);
-    expect(boardTexts(outC)).toHaveLength(1);
+    expect(boardTexts(outC)).toHaveLength(0);
   });
 
   test('A1/A2: no synthetic message is ever placed between a tool_call and its tool_result across a growing tool loop', async () => {
@@ -636,12 +610,12 @@ describe('board injection keeps the ModelMessage[] array valid', () => {
     expect(assistant?.parts.some(isBoardPart)).toBe(false);
   });
 
-  test('A4: a board on a still-present text-only user anchor is replayed byte-identically', async () => {
+  test('A4: a prior board is stripped and replaced at the current trailing tail', async () => {
     const board = runningBoard();
     const hook = createHook(board);
 
-    // Request A: the tail is a plain user turn, so the board rides on it as a
-    // trailing PART and is recorded for replay.
+    // Request A: the tail is a plain user turn, so the board is appended as
+    // its own synthetic volatile message.
     const historyA = [
       userTextTurn('u1', 'Coordinate the background research'),
       toolResultUserTurn('r0', 'call-read-0', 'first read'),
@@ -651,63 +625,59 @@ describe('board injection keeps the ModelMessage[] array valid', () => {
     const anchorA = (outA as AnyMessage[]).find(
       (message) => message.info.id === 'u2',
     );
-    const retainedBoard = anchorA?.parts.at(-1);
-    expect(isBoardPart(retainedBoard as AnyPart)).toBe(true);
-    const retainedBytes = JSON.stringify(retainedBoard);
+    expect(anchorA?.parts.some(isBoardPart)).toBe(false);
+    expect(boardTexts(outA)).toHaveLength(1);
+    expect(outA.at(-1)?.info.id).toBe('u2-background-job-board');
 
-    // Request B: the tail advanced past that anchor. The already-sent board
-    // bytes on `u2` must be reproduced exactly — that is the cache guarantee
-    // 208b656 introduced and this fix preserves.
+    // Request B includes the old transformed payload to prove that latest
+    // strips the stale board instead of retaining or replaying it on `u2`.
     board.updateStatus({
       taskID: CHILD,
       state: 'completed',
       resultSummary: 'scheduler batches on idle',
     });
     const historyB = [
-      ...historyA,
+      ...outA,
       finishedTaskAssistantTurn('a1', 'call-task-1'),
-      toolResultUserTurn('r1', 'call-read-1', 'second read'),
+      userTextTurn('u3', 'Now summarize the findings'),
     ];
     const outB = await request(hook, historyB);
 
     const anchorB = (outB as AnyMessage[]).find(
       (message) => message.info.id === 'u2',
     );
-    const replayed = anchorB?.parts.at(-1);
-    expect(isBoardPart(replayed as AnyPart)).toBe(true);
-    // Byte-identical replay: the provider's cached prefix stays valid.
-    expect(JSON.stringify(replayed)).toBe(retainedBytes);
+    expect(anchorB?.parts.some(isBoardPart)).toBe(false);
+    expect(boardTexts(outB)).toHaveLength(1);
+    expect(outB.at(-1)?.info.id).toBe('u3-background-job-board');
+    expect(
+      (outB as AnyMessage[])
+        .slice(0, -1)
+        .some((message) => message.parts.some(isBoardPart)),
+    ).toBe(false);
 
     // And the array is still valid and invariant-clean.
     expect(validateModelMessages(outB).success).toBe(true);
     assertAllInvariants(outB);
   });
 
-  test('A5: an unreplayable retained board is dropped instead of retried every request', async () => {
+  test('A5: repeated transforms keep exactly one board at the trailing tail', async () => {
     const board = runningBoard();
     const hook = createHook(board);
 
     // Request A: assistant tail → the board is appended as a trailing message.
-    // That placement is deliberately NOT retained, because reproducing it later
-    // would require a mid-array insertion.
-    await request(hook, [
+    const outA = await request(hook, [
       userTextTurn('u1', 'Coordinate the background research'),
       finishedTaskAssistantTurn('a1', 'call-task-1'),
     ]);
 
-    const historyB = [
-      userTextTurn('u1', 'Coordinate the background research'),
-      finishedTaskAssistantTurn('a1', 'call-task-1'),
-      toolResultUserTurn('r1', 'call-read-1', 'file contents'),
-    ];
-
-    // Repeated consecutive requests must each carry exactly ONE board: no
-    // resurrection of the dropped placement, no unbounded accumulation, and no
-    // repeated attempt at the unsafe replay.
+    // Repeated transforms may receive the prior transformed payload. They must
+    // strip the old tail and append one replacement, never accumulate boards.
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const out = await request(hook, historyB);
+      const out = await request(hook, outA);
       expect(boardTexts(out)).toHaveLength(1);
-      // The dropped board is not reproduced on the assistant anchor.
+      expect(out.at(-1)?.info.role).toBe('user');
+      expect(out.at(-1)?.info.id).toBe('u1-background-job-board');
+      // The board is not reproduced on the assistant anchor.
       const assistant = (out as AnyMessage[]).find(
         (message) => message.info.role === 'assistant',
       );

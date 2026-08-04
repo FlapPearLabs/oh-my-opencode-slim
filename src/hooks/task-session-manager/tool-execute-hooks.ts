@@ -5,11 +5,7 @@
  * reusable/recoverable task_id resolution) and `tool.execute.after`
  * (read context tracking, task launch registration/update from output).
  */
-import type {
-  BackgroundJobStore,
-  BackgroundJobSupervisor,
-  ContextFile,
-} from '../../utils';
+import type { BackgroundJobStore, ContextFile } from '../../utils';
 import {
   deriveTaskSessionLabel,
   parseTaskIdFromTaskOutput,
@@ -30,7 +26,6 @@ interface TaskArgs {
   prompt?: unknown;
   subagent_type?: unknown;
   task_id?: unknown;
-  background?: unknown;
 }
 
 export async function handleToolExecuteBefore(
@@ -45,7 +40,6 @@ export async function handleToolExecuteBefore(
       pendingCallId(sessionID?: string, callID?: string): string;
     };
     taskContextTracker: { pendingManagedTaskIds: Set<string> };
-    backgroundJobSupervisor?: BackgroundJobSupervisor;
   },
 ): Promise<void> {
   const toolName = input.tool.toLowerCase();
@@ -76,7 +70,6 @@ export async function handleToolExecuteBefore(
   }
 
   const agentType = args.subagent_type.trim();
-  const background = args.background === true;
 
   const label = deriveTaskSessionLabel({
     description:
@@ -93,7 +86,6 @@ export async function handleToolExecuteBefore(
     parentSessionId: input.sessionID,
     agentType,
     label,
-    background,
   };
   if (typeof args.task_id === 'string' && args.task_id.trim() !== '') {
     const requested = args.task_id.trim();
@@ -164,7 +156,6 @@ export async function handleToolExecuteAfter(
       contextFilesForPrompt(taskId: string): ContextFile[];
       prune(board: { taskIDs(): Set<string> }): void;
     };
-    backgroundJobSupervisor?: BackgroundJobSupervisor;
   },
 ): Promise<void> {
   if (input.tool.toLowerCase() === 'read') {
@@ -184,16 +175,7 @@ export async function handleToolExecuteAfter(
 
   if (input.tool.toLowerCase() !== 'task') return;
 
-  const exactCallID =
-    typeof input.callID === 'string' && input.callID.trim() !== ''
-      ? input.callID
-      : undefined;
-  const pending = deps.pendingCallTracker.take(
-    exactCallID,
-    exactCallID ? undefined : input.sessionID,
-  );
-  const exactCallConfirmed =
-    exactCallID !== undefined && pending?.callId === exactCallID;
+  const pending = deps.pendingCallTracker.take(input.callID, input.sessionID);
   log('[task-session-manager] tool.execute.after task', {
     callID: input.callID,
     sessionID: input.sessionID,
@@ -214,10 +196,7 @@ export async function handleToolExecuteAfter(
       agent: pending.agentType,
       description: pending.label,
       objective: pending.label,
-      background: exactCallConfirmed && pending.background,
-      preserveRun: pending.resumedTaskId === undefined,
     });
-    if (exactCallConfirmed) deps.backgroundJobSupervisor?.onLaunch(record);
     log('[task-session-manager] background task launch registered', {
       taskID: record.taskID,
       alias: record.alias,
@@ -246,10 +225,7 @@ export async function handleToolExecuteAfter(
         agent: pending.agentType,
         description: pending.label,
         objective: pending.label,
-        background: exactCallConfirmed && pending.background,
-        preserveRun: pending.resumedTaskId === undefined,
       });
-    if (exactCallConfirmed) deps.backgroundJobSupervisor?.onLaunch(record);
     const updated = deps.backgroundJobBoard.updateStatus({
       taskID: status.taskID,
       state: status.state,
@@ -265,7 +241,6 @@ export async function handleToolExecuteAfter(
     });
     if (pending.resumedTaskId && pending.resumedTaskId !== status.taskID) {
       deps.backgroundJobBoard.drop(pending.resumedTaskId);
-      deps.backgroundJobSupervisor?.drop(pending.resumedTaskId);
     }
     deps.taskContextTracker.pendingManagedTaskIds.delete(status.taskID);
     deps.backgroundJobBoard.addContext(
@@ -283,14 +258,12 @@ export async function handleToolExecuteAfter(
       isMissingRememberedSessionError(output.output)
     ) {
       deps.backgroundJobBoard.drop(pending.resumedTaskId);
-      deps.backgroundJobSupervisor?.drop(pending.resumedTaskId);
     }
     return;
   }
 
   if (pending.resumedTaskId && pending.resumedTaskId !== taskId) {
     deps.backgroundJobBoard.drop(pending.resumedTaskId);
-    deps.backgroundJobSupervisor?.drop(pending.resumedTaskId);
   }
 
   deps.taskContextTracker.pendingManagedTaskIds.delete(taskId);

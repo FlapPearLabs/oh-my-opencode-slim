@@ -164,9 +164,7 @@ changes before launching a replacement lane.
 Terminal jobs are reconciled automatically after their result is injected into
 the orchestrator session. That lifecycle state is not proof the output was used;
 the orchestrator must still verify it consumed the relevant result before
-finalizing. When idle reconciliation performs that reconciliation, the opt-in
-continuation evaluator can run in the same idle cycle, subject to its existing
-guards.
+finalizing.
 
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them
 against each other and the original user goal.
@@ -352,10 +350,6 @@ unavailable or malformed. A matching reply, or a rejected question, clears its
 tool-backed wait but does not itself inject a nudge; the normal session lifecycle
 decides whether a later nudge is needed.
 
-When idle reconciliation first reconciles an injected terminal result, the
-opt-in evaluator may run in that same idle cycle; the existing liveness,
-wait, fallback, and one-attempt guards still apply.
-
 For external manual work, the orchestrator first gives the user concrete steps,
 then calls `wait_for_user` as its final tool action. This explicit signal covers
 text-only HITL turns without attempting to infer intent from assistant prose. The
@@ -412,48 +406,40 @@ miss at the epoch boundary, after which a fresh run of up to the configured limi
 can accumulate. The cache is lost on plugin restart, so snapshots are not
 restored beyond those present in the current OpenCode message history.
 
-### Opt-in Wall-clock Supervisor
+### Passive diagnostic trace
 
-The plugin can apply a one-shot wall-clock deadline to native background task
-child sessions. It is disabled by default:
+The plugin also keeps a passive background-task diagnostic trace. It is written
+under OpenCode's log directory, by default
+`~/.local/share/opencode/log/oh-my-opencode-slim.trace.<timestamp>-<pid>-<generation>.log`
+(or the corresponding file directly under `$OPENCODE_LOG_DIR` when
+`OPENCODE_LOG_DIR` is set). The generation is a process-local monotonically
+increasing suffix appended after the process ID and timestamp, so each plugin
+initialization gets a unique trace file even when multiple OpenCode processes
+or initializations occur within one second.
+Trace files use the same seven-day retention policy as the other persisted
+background task diagnostics.
 
-```jsonc
-{
-  "backgroundJobs": {
-    "wallClockTimeoutMs": 900000,
-    "abortGraceMs": 10000
-  }
-}
-```
+The trace records lifecycle evidence from host events, generic tool execution
+observations (`tool.execute.before/after` for every tool), and coordinator board
+transitions. Redaction applies to the captured diagnostic
+payload: task prompts/descriptions, tool arguments/results, and other
+free-form values are not retained as raw content; identifiers and bounded
+state metadata needed to correlate local events are retained. It is
+observation-only: trace data never enters prompts, messages, or board
+formatting, and the trace does not change task state or scheduling decisions.
+This redaction scope applies to trace records, not to unrelated host or plugin
+logs. It adds no configuration surface.
 
-This supervisor recognizes only an explicit `task(..., background: true)` call.
-Foreground tasks and calls where `background` is omitted or `false` are not
-supervised. The deadline begins at the first launch observation for the current
-run. Duplicate `session.created`/tool-hook observations, busy activity, tool
-activity, and liveness timestamps do not renew it. An explicit relaunch or reuse
-starts a new run generation.
+Receipt order is local to this plugin instance. A host event is received by the
+trace before the event hook's first asynchronous operation; generic
+`tool.execute.before/after` observations likewise happen before the existing
+hooks, while board transitions are observed at the coordinator's write
+boundary. This ordering is evidence about local receipt order, not a claim
+about ordering inside OpenCode, a provider, or a multiplexer.
 
-When the deadline wins a race with a real terminal transition, the board records
-a persistent hard-deadline marker, marks cancellation as requested, starts the
-bounded abort grace period, and issues exactly one native session abort. The
-grace timer is independent of whether the SDK abort resolves, rejects, or hangs.
-An error, cancellation, or child deletion during grace publishes one stable
-timed-out terminal outcome. If no terminal confirmation arrives before grace
-expires, the outcome is `error`, `timedOut: true`, and `statusUncertain: true`,
-with a summary stating that abort was not confirmed.
-
-Late completion, busy, retry, or error events cannot replace a published hard
-timeout, and a hard wall-clock timeout is not recoverable through the existing
-external task-wait timeout path. The timeout outcome remains visible to the
-parent through the normal terminal-unreconciled Background Job Board flow; no
-prompt or raw task-result rewrite is used. Timeout terminals also issue a
-permanent logical pane-close intent so generic and cmux multiplexer paths do not
-respawn a pane on late busy events.
-
-`wallClockTimeoutMs` accepts `0` or integers from `60000` through `2147483647`;
-`abortGraceMs` accepts integers from `1000` through `60000`. This feature is
-wall-clock-only: no no-progress/plateau policy, foreground fallback, model swap,
-session deletion retry, or worker-death guarantee is implied.
+The trace provides evidence for reconstructing what the plugin observed. It is
+not a stuck-task verdict: absence of a receipt, a delayed event, or a board
+transition does not by itself prove that a task is stuck.
 
 ---
 

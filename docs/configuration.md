@@ -136,7 +136,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `acpAgents.<name>.permissionMode` | string | `ask` | How ACP permission requests are handled: `ask`, `allow`, or `reject` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
-| `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` requires Observer enabled and saves image attachments to disk before nudging delegation to @observer. `"direct"`: always pass images to the orchestrator. |
+| `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, images are intercepted only when Observer is enabled, preserving existing behavior. Explicit `"auto"` requires Observer enabled and saves image attachments to disk before nudging delegation to @observer. `"direct"`: always pass images to the orchestrator. |
 | `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux`, `kitty`, or `none` See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Tmux applies full layouts; Zellij and Herdr map supported layouts to split directions; cmux maintains a right-hand agent column See [Multiplexer Integration](multiplexer-integration.md). |
@@ -152,8 +152,6 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.maxRetainedSnapshots` | integer | `20` | Maximum board snapshots retained per checkpoint cache epoch (1–100). Adding a snapshot beyond the limit starts a new epoch with only the current snapshot, intentionally creating one cache miss See [Background Job Management](#background-job-management). |
 | `backgroundJobs.strategy` | `"latest"` \| `"checkpoint-compatible"` | `"latest"` | Board injection strategy. `latest` preserves the current strip-and-replace behavior; `checkpoint-compatible` appends only when the formatted board changes and uses `backgroundJobs.maxRetainedSnapshots` per cache epoch. Cache state resets on compaction/session boundaries and is lost on plugin restart See [Background Job Management](#background-job-management). |
 | `backgroundJobs.continueOnIdle` | boolean | `false` | **Beta opt-in.** Set `true` to let idle orchestrator sessions with incomplete todos receive one automatic hidden continuation prompt. When omitted or `false`, idle reconciliation and background-job orchestration remain active without automatic continuation prompts. See [Background Orchestration](background-orchestration.md#incomplete-todo-continuation-nudge) See [Background Job Management](#background-job-management). |
-| `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native `task(..., background: true)` child sessions are supervised; accepted values are `60000`–`2147483647` milliseconds See [Background Job Management](#background-job-management). |
-| `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
@@ -295,8 +293,6 @@ incomplete-todo continuation prompts on idle. For glossary definitions of
 background-job terms (board snapshot, checkpoint cache epoch, injection
 strategy, etc.), see [CONTEXT.md — Background
 Jobs](../CONTEXT.md#background-jobs).
-The wall-clock supervisor is separately opt-in and remains disabled unless
-`wallClockTimeoutMs` is set:
 
 ```jsonc
 {
@@ -304,22 +300,15 @@ The wall-clock supervisor is separately opt-in and remains disabled unless
     "maxSessionsPerAgent": 3,
     "strategy": "checkpoint-compatible",
     "maxRetainedSnapshots": 10,
-    "continueOnIdle": true,
-    "wallClockTimeoutMs": 900000,
-    "abortGraceMs": 10000
+    "continueOnIdle": true
   }
 }
 ```
 
-Without `continueOnIdle`, idle reconciliation and background-job orchestration
-remain enabled but no hidden continuation prompts are sent. See the
+Without that opt-in, idle reconciliation and background-job orchestration remain
+enabled but no hidden continuation prompts are sent. See the
 [Background Orchestration](background-orchestration.md) guide for the concept,
 defaults, and examples.
-`wallClockTimeoutMs` is a hard deadline that only supervises explicitly
-background native task calls; foreground calls or calls with `background`
-omitted are not supervised. It is independent from OpenCode's external
-task-wait timeout, and a wall-clock timeout cannot be recovered by reusing the
-running session.
 
 ### Agent Display Names
 

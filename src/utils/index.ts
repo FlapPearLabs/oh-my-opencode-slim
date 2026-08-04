@@ -2,7 +2,6 @@ export * from './agent-variant';
 export * from './background-job-board';
 export * from './background-job-coordinator';
 export * from './background-job-store';
-export * from './background-job-supervisor';
 export * from './internal-initiator';
 export { initLogger, log } from './logger';
 export * from './polling';

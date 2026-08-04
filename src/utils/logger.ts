@@ -19,7 +19,7 @@ let loggerGeneration = 0;
 let currentSink: LogSink = { kind: 'uninitialized' };
 let writeChain: Promise<void> = Promise.resolve();
 
-function getLogDir(): string {
+export function getLogDir(): string {
   return (
     process.env.OPENCODE_LOG_DIR ??
     path.join(os.homedir(), '.local/share/opencode/log')

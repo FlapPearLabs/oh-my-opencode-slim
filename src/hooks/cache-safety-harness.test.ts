@@ -14,7 +14,7 @@ import {
 } from '../config/constants';
 import { BackgroundJobBoard, createInternalAgentTextPart } from '../utils';
 import { createDisplayNameMentionRewriter } from '../utils/agent-variant';
-import { isTaggedPart } from './cache-safe-injection';
+import { isVolatileTaggedMessage } from './cache-safe-injection';
 import { createFilterAvailableSkillsHook } from './filter-available-skills';
 import { processImageAttachments } from './image-hook';
 import { createPhaseReminderHook } from './phase-reminder';
@@ -25,7 +25,6 @@ import {
   createTaskSessionManagerHook,
 } from './task-session-manager';
 import type { MessageWithParts } from './types';
-import { isMessageWithParts } from './types';
 
 export const SESSION_ID = 'ses_cache_safety_fixture';
 export const FIXTURE_NOW = 1_700_000_000_000;
@@ -112,7 +111,7 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
     processImageAttachments({
       messages: output.messages as MessageWithParts[],
       workDir: '/tmp/cache-safety-fixture',
-      imageRouting: resolveImageRouting(undefined, true),
+      imageRouting: resolveImageRouting(undefined),
       disabledAgents: new Set(),
       log: noopLog,
     });
@@ -230,19 +229,11 @@ export function turnEndIndices(history: unknown[]): number[] {
 }
 
 export function stableFingerprints(messages: unknown[]): string[] {
-  // The volatile board is a tagged part appended to the last real message (or,
-  // for legacy paths, a whole tagged trailing message). Both must be excluded
-  // from the stable fingerprint: strip tagged parts from every message and
-  // drop any message that was wholly volatile, then fingerprint what remains.
   return messages
-    .flatMap((message) => {
-      if (!isMessageWithParts(message)) return [message];
-      const stableParts = message.parts.filter(
-        (part) => !isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY),
-      );
-      if (stableParts.length === 0) return [];
-      return [{ ...message, parts: stableParts }];
-    })
+    .filter(
+      (message) =>
+        !isVolatileTaggedMessage(message, BACKGROUND_JOB_BOARD_METADATA_KEY),
+    )
     .map((message) => JSON.stringify(message));
 }
 

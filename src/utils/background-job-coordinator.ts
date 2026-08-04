@@ -1,19 +1,22 @@
 import type {
   BackgroundJobBoard,
   BackgroundJobLaunchInput,
-  BackgroundJobPromptMetadata,
   BackgroundJobRecord,
   BackgroundJobStatusInput,
   ContextFile,
-  WallClockTimeoutClaimInput,
-  WallClockTimeoutFinalizeInput,
 } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
+import type {
+  BackgroundJobStore,
+  BackgroundJobTransition,
+} from './background-job-store';
 import { log } from './logger';
-import type { TaskOutputState } from './task';
+import { parseTaskStatusOutput, type TaskOutputState } from './task';
 
 type TerminalStateListener = (taskID: string) => void;
-type TerminalOutcomeListener = (record: BackgroundJobRecord) => void;
+type TransitionObserver = (transition: BackgroundJobTransition) => void;
+type BackgroundJobCoordinatorOptions = {
+  onTransition?: TransitionObserver;
+};
 
 /**
  * BackgroundJobCoordinator owns the lifecycle policy for background jobs.
@@ -28,11 +31,18 @@ type TerminalOutcomeListener = (record: BackgroundJobRecord) => void;
  */
 export class BackgroundJobCoordinator implements BackgroundJobStore {
   private terminalStateListeners: TerminalStateListener[] = [];
-  private terminalOutcomeListeners: TerminalOutcomeListener[] = [];
   // Stores session IDs (which equal task IDs) awaiting close after background job completes
   private readonly deferredIdleCloses = new Set<string>();
+  private readonly transitionObserver?: TransitionObserver;
 
-  constructor(private readonly board: BackgroundJobBoard) {
+  constructor(
+    private readonly board: BackgroundJobBoard,
+    transitionObserver?: TransitionObserver | BackgroundJobCoordinatorOptions,
+  ) {
+    this.transitionObserver =
+      typeof transitionObserver === 'function'
+        ? transitionObserver
+        : transitionObserver?.onTransition;
     // Subscribe to the board's terminal state notifications
     this.board.addTerminalStateListener((taskID) => {
       this.handleTerminalState(taskID);
@@ -74,24 +84,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
         }
       }
     }
-
-    const record = this.board.get?.(taskID);
-    if (record) {
-      for (const listener of this.terminalOutcomeListeners) {
-        listener(record);
-      }
-    }
-  }
-
-  /** Observe every canonical terminal publication, including non-idle jobs. */
-  addTerminalOutcomeListener(listener: TerminalOutcomeListener): void {
-    this.terminalOutcomeListeners.push(listener);
-  }
-
-  removeTerminalOutcomeListener(listener: TerminalOutcomeListener): void {
-    this.terminalOutcomeListeners = this.terminalOutcomeListeners.filter(
-      (entry) => entry !== listener,
-    );
   }
 
   // ── Lifecycle policy ─────────────────────────────────────────────
@@ -128,43 +120,63 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
   // ── Mutation methods (sole writer to board) ──────────────────────
 
   registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord {
-    return this.board.registerLaunch(input);
+    const before = this.board.get(input.taskID);
+    const result = this.board.registerLaunch(input);
+    if (result !== before) {
+      this.observeTransition(this.createTransition('launch', before, result));
+    }
+    return result;
   }
 
   updateStatus(
     input: BackgroundJobStatusInput,
   ): BackgroundJobRecord | undefined {
-    return this.board.updateStatus(input);
+    const before = this.board.get(input.taskID);
+    const result = this.board.updateStatus(input);
+    if (result !== undefined && result !== before) {
+      this.observeTransition(this.createTransition('status', before, result));
+    }
+    return result;
   }
 
   updateFromStatusOutput(output: string): BackgroundJobRecord | undefined {
-    return this.board.updateFromStatusOutput(output);
-  }
+    const status = parseTaskStatusOutput(output);
+    if (!status) return undefined;
 
-  claimWallClockDeadline(
-    input: WallClockTimeoutClaimInput,
-  ): BackgroundJobRecord | undefined {
-    return this.board.claimWallClockDeadline(input);
-  }
-
-  finalizeWallClockTimeout(
-    input: WallClockTimeoutFinalizeInput,
-  ): BackgroundJobRecord | undefined {
-    return this.board.finalizeWallClockTimeout(input);
+    return this.updateStatus({
+      taskID: status.taskID,
+      state: status.state,
+      timedOut: status.timedOut,
+      resultSummary: status.result,
+    });
   }
 
   markRunningFromLiveSession(
     taskID: string,
     now = Date.now(),
   ): BackgroundJobRecord | undefined {
-    return this.board.markRunningFromLiveSession(taskID, now);
+    const before = this.board.get(taskID);
+    const result = this.board.markRunningFromLiveSession(taskID, now);
+    if (result !== undefined && result !== before) {
+      this.observeTransition(
+        this.createTransition('live-busy', before, result),
+      );
+    }
+    return result;
   }
 
   markReconciled(
     taskID: string,
     now = Date.now(),
   ): BackgroundJobRecord | undefined {
-    return this.board.markReconciled(taskID, now);
+    const before = this.board.get(taskID);
+    const result = this.board.markReconciled(taskID, now);
+    if (result !== undefined && result !== before) {
+      this.observeTransition(
+        this.createTransition('reconciled', before, result),
+      );
+    }
+    return result;
   }
 
   markCancelled(
@@ -173,7 +185,14 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     now = Date.now(),
     options: { force?: boolean } = {},
   ): BackgroundJobRecord | undefined {
-    return this.board.markCancelled(taskID, reason, now, options);
+    const before = this.board.get(taskID);
+    const result = this.board.markCancelled(taskID, reason, now, options);
+    if (result !== undefined && result !== before) {
+      this.observeTransition(
+        this.createTransition('cancelled', before, result),
+      );
+    }
+    return result;
   }
 
   // ── Query methods ────────────────────────────────────────────────
@@ -271,18 +290,63 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     return this.board.formatForPrompt(parentSessionID, now);
   }
 
-  formatForPromptWithMetadata(
-    parentSessionID: string,
-    now = Date.now(),
-  ): BackgroundJobPromptMetadata | undefined {
-    return this.board.formatForPromptWithMetadata(parentSessionID, now);
-  }
-
   clearParent(parentSessionID: string): void {
+    const affectedJobs = this.board.list(parentSessionID);
     this.board.clearParent(parentSessionID);
+    for (const job of affectedJobs) {
+      if (this.board.get(job.taskID) === undefined) {
+        this.observeTransition(
+          this.createTransition('clear-parent', job, undefined),
+        );
+      }
+    }
   }
 
   drop(taskID: string): void {
+    const before = this.board.get(taskID);
     this.board.drop(taskID);
+    if (before && this.board.get(taskID) === undefined) {
+      this.observeTransition(this.createTransition('drop', before, undefined));
+    }
+  }
+
+  private observeTransition(transition: BackgroundJobTransition): void {
+    if (!this.transitionObserver) return;
+
+    try {
+      this.transitionObserver(transition);
+    } catch (error) {
+      log('Coordinator transition observer threw', {
+        operation: transition.operation,
+        taskID: transition.taskID,
+        parentSessionID: transition.parentSessionID,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private createTransition(
+    operation: BackgroundJobTransition['operation'],
+    prior: BackgroundJobRecord | undefined,
+    result: BackgroundJobRecord | undefined,
+  ): BackgroundJobTransition {
+    const record = result ?? prior;
+    if (!record) {
+      throw new Error(
+        'Cannot create a background job transition without a record',
+      );
+    }
+
+    return {
+      operation,
+      taskID: record.taskID,
+      parentSessionID: record.parentSessionID,
+      priorState: prior?.state,
+      resultState: result?.state,
+      terminalUnreconciled: record.terminalUnreconciled,
+      cancellationRequested: record.cancellationRequested,
+      statusUncertain: record.statusUncertain,
+      timedOut: record.timedOut,
+    };
   }
 }

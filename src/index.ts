@@ -24,7 +24,6 @@ import {
   DEFAULT_READ_CONTEXT_MAX_FILES,
   DEFAULT_READ_CONTEXT_MIN_LINES,
   resolveImageRouting,
-  TOAST_DURATION_MS,
 } from './config/constants';
 import {
   getActiveRuntimePreset,
@@ -51,6 +50,7 @@ import {
   SessionLifecycle,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
+import { createBackgroundTaskTrace } from './hooks/task-session-manager/diagnostic-trace';
 import { isMessageWithParts, type MessageWithParts } from './hooks/types';
 import { handleTaskSessionEvent } from './index-event';
 import { createInterviewManager } from './interview';
@@ -72,7 +72,6 @@ import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
 import {
   BackgroundJobBoard,
   BackgroundJobCoordinator,
-  BackgroundJobSupervisor,
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
@@ -104,10 +103,6 @@ async function appLog(
   }
 }
 
-// Debounce: only show image-skipped toast once per 60 seconds per project
-const lastImageSkippedToastByDir = new Map<string, number>();
-const IMAGE_SKIPPED_DEBOUNCE_MS = 60_000;
-
 /**
  * Probe jsdom at init time so the first webfetch call doesn't fail
  * silently. Logs a warning if jsdom can't be imported or instantiated,
@@ -128,8 +123,11 @@ async function probeJSDOM(): Promise<string | null> {
 // re-runs, it checks this variable and applies the runtime preset instead
 // of the config file's preset. State lives in config/runtime-preset.ts.
 
+let pluginInitializationGeneration = 0;
+
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
-  const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+  const sessionId = `${timestamp}-${process.pid}-${++pluginInitializationGeneration}`;
   initLogger(sessionId);
 
   if (isPluginDisabledByEnv()) {
@@ -178,12 +176,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let delegateTaskRetry: ReturnType<typeof createDelegateTaskRetryHook>;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
   let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
+  let backgroundTaskTrace: ReturnType<typeof createBackgroundTaskTrace>;
   let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
   let delegateTaskRetryAfter: (i: unknown, o: unknown) => Promise<void>;
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
-  let backgroundJobSupervisor: BackgroundJobSupervisor;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let companionManager: CompanionManager;
   let cancelTaskTools: ReturnType<typeof createCancelTaskTool>;
@@ -200,11 +198,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   try {
     config = loadPluginConfig(ctx.directory);
+    backgroundTaskTrace = createBackgroundTaskTrace({ instanceID: sessionId });
 
-    // Safety net: instance disposal reruns the plugin factory and rebuilds
-    // factory-local state, while module-level runtime preset state may persist.
-    // Reapply that persisted preset so each fresh generation creates agents
-    // with the correct models.
+    // Safety net: if a runtime preset was set via /preset command and
+    // OpenCode ever fully re-runs the plugin function (not just the
+    // config() hook), override config.preset so agents are created with
+    // the correct models. Currently only the config() hook re-runs after
+    // Instance.dispose(), so this is a defensive guard.
     const runtimePreset = getActiveRuntimePreset();
     if (runtimePreset && config.presets?.[runtimePreset]) {
       config.preset = runtimePreset;
@@ -270,30 +270,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       Object.keys(config.acpAgents ?? {}).length > 0
         ? { acp_run: createAcpRunTool(config.acpAgents) }
         : {};
-    const webfetchModel = config.webfetch?.model;
-    const webfetchModels = (() => {
-      if (!webfetchModel) return undefined;
-      const entries = Array.isArray(webfetchModel)
-        ? webfetchModel
-        : [webfetchModel];
-      type ModelRefInput = string | { id: string; variant?: string };
-      const models: Array<{ id: string; variant?: string }> = [];
-      for (const entry of entries as ModelRefInput[]) {
-        const id = typeof entry === 'string' ? entry : entry.id;
-        if (!id) continue;
-        models.push({
-          id,
-          ...(typeof entry === 'object' && entry.variant
-            ? { variant: entry.variant }
-            : {}),
-        });
-      }
-      return models.length > 0 ? models : undefined;
-    })();
-    webfetch = createWebfetchTool(ctx, {
-      binaryDir: undefined,
-      webfetchModels,
-    });
+    webfetch = createWebfetchTool(ctx);
     backgroundJobBoard = new BackgroundJobBoard({
       maxReusablePerAgent:
         config.backgroundJobs?.maxSessionsPerAgent ??
@@ -311,19 +288,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Initialize coordinator as the sole writer to the board
     const backgroundJobCoordinator = new BackgroundJobCoordinator(
       backgroundJobBoard,
+      { onTransition: backgroundTaskTrace.observeBoardTransition },
     );
-    backgroundJobSupervisor = new BackgroundJobSupervisor({
-      backgroundJobStore: backgroundJobCoordinator,
-      wallClockTimeoutMs: config.backgroundJobs?.wallClockTimeoutMs ?? 0,
-      abortGraceMs: config.backgroundJobs?.abortGraceMs ?? 10_000,
-      abort: (taskID) =>
-        ctx.client.session.abort({
-          path: { id: taskID },
-        }),
-    });
-    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
-      backgroundJobSupervisor.onTerminal(record);
-    });
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions
@@ -334,12 +300,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     );
     backgroundJobCoordinator.addTerminalStateListener((taskID) => {
       void multiplexerSessionManager.closeSessionFromCoordinator(taskID);
-    });
-    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
-      if (record.deadlineExceededAt === undefined) return;
-      void multiplexerSessionManager.closeSessionPermanentlyFromCoordinator(
-        record.taskID,
-      );
     });
 
     sessionLifecycle = new SessionLifecycle(log);
@@ -382,7 +342,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         DEFAULT_READ_CONTEXT_MAX_FILES,
       continueOnIdle: config.backgroundJobs?.continueOnIdle === true,
       backgroundJobBoard: backgroundJobCoordinator,
-      backgroundJobSupervisor,
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {
@@ -480,12 +439,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         taskSessionManagerHook.beginUserWait(sessionID),
     });
 
-    const shouldRegisterWebfetch = config.webfetch?.enabled !== false;
     tools = {
       ...cancelTaskTools,
       ...waitForUserTools,
       ...acpRunTools,
-      ...(shouldRegisterWebfetch ? { webfetch } : {}),
+      webfetch,
       ast_grep_search,
       ast_grep_replace,
     };
@@ -520,10 +478,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     Array.isArray(config.disabled_mcps) && config.disabled_mcps.length > 0
       ? 0
       : HEALTH_CHECK.minMcps;
-  const toolThreshold = minimumExpectedToolCount(
-    config.disabled_tools,
-    config.webfetch?.enabled !== false,
-  );
+  const toolThreshold = minimumExpectedToolCount(config.disabled_tools);
+
   if (
     agentCount < HEALTH_CHECK.minAgents ||
     toolCount < toolThreshold ||
@@ -718,10 +674,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      // Runtime preset override: instance disposal recreates the plugin
-      // factory and its factory-local state, while module-level runtime
-      // preset data may persist. Apply that persisted selection after normal
-      // model resolution for the current generation.
+      // Runtime preset override: if /preset switched to a runtime preset,
+      // override the model/variant/temperature from the preset's agent
+      // config. This runs after the normal model resolution because the
+      // config() hook re-runs with stale modelArrayMap after dispose(),
+      // but the runtime preset data is in the captured `config` closure.
       const runtimePresetName = getActiveRuntimePreset();
       if (runtimePresetName && config.presets?.[runtimePresetName]) {
         const runtimePreset = config.presets[runtimePresetName];
@@ -946,6 +903,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     event: async (input) => {
+      backgroundTaskTrace.observeHostEvent(input);
       await cacheMonitor.event(input);
 
       const event = input.event as {
@@ -1028,29 +986,35 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      await handleTaskSessionEvent(
-        input as {
-          event: {
-            type: string;
-            properties?: { info?: { id?: string }; sessionID?: string };
-          };
-        },
-        taskSessionManagerHook.event,
-        async () => {
-          // Handle multiplexer pane spawning for OpenCode's Task tool sessions
-          await multiplexerSessionManager.onSessionCreated(event);
+      try {
+        await handleTaskSessionEvent(
+          input as {
+            event: {
+              type: string;
+              properties?: { info?: { id?: string }; sessionID?: string };
+            };
+          },
+          taskSessionManagerHook.event,
+          async () => {
+            // Handle multiplexer pane spawning for OpenCode's Task tool sessions
+            await multiplexerSessionManager.onSessionCreated(event);
 
-          // Handle session status/idle events for pane cleanup early so child panes
-          // close promptly even if later hooks do additional work on idle.
-          await multiplexerSessionManager.onSessionStatus(event);
+            // Handle session status/idle events for pane cleanup early so child panes
+            // close promptly even if later hooks do additional work on idle.
+            await multiplexerSessionManager.onSessionStatus(event);
 
-          // Handle session.deleted events for pane cleanup
-          await multiplexerSessionManager.onSessionDeleted(event);
-        },
-        async () => {
-          await multiplexerSessionManager.cleanupOnInstanceDisposed();
-        },
-      );
+            // Handle session.deleted events for pane cleanup
+            await multiplexerSessionManager.onSessionDeleted(event);
+          },
+          async () => {
+            await multiplexerSessionManager.cleanupOnInstanceDisposed();
+          },
+        );
+      } finally {
+        if (event.type === 'server.instance.disposed') {
+          await backgroundTaskTrace.dispose();
+        }
+      }
 
       // Runtime model fallback for foreground agents (rate-limit detection)
       await foregroundFallback.handleEvent(input.event);
@@ -1107,14 +1071,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
-    dispose: async () => {
-      await taskSessionManagerHook.event({
-        event: { type: 'server.instance.disposed' },
-      });
-      await multiplexerSessionManager.cleanupOnInstanceDisposed();
-    },
-
     'tool.execute.before': async (input, output) => {
+      backgroundTaskTrace.observeTaskToolBefore(input, output);
       await applyPatch['tool.execute.before'](input as never, output as never);
       await taskSessionManagerHook['tool.execute.before'](
         input as never,
@@ -1168,11 +1126,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       input: {
         sessionID: string;
         agent?: string;
-        model?: {
-          providerID: string;
-          modelID: string;
-        };
-        variant?: string;
         parts?: unknown[];
         /** OpenCode chat.message message identity when present. */
         messageID?: string;
@@ -1183,11 +1136,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           agent?: string;
           role?: string;
           sessionID?: string;
-          model?: {
-            providerID: string;
-            modelID: string;
-            variant?: string;
-          };
         };
         parts?: unknown[];
       },
@@ -1294,39 +1242,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
-      const imageResult = processImageAttachments({
+      processImageAttachments({
         messages: typedOutput.messages,
         workDir: ctx.directory,
-        imageRouting: resolveImageRouting(
-          config.image_routing,
-          !disabledAgents.has('observer'),
-        ),
+        imageRouting: resolveImageRouting(config.image_routing),
         disabledAgents,
         log,
       });
-      if (imageResult) {
-        const now = Date.now();
-        const last = lastImageSkippedToastByDir.get(ctx.directory) ?? 0;
-        if (now - last > IMAGE_SKIPPED_DEBOUNCE_MS) {
-          ctx.client.tui
-            .showToast({
-              body: {
-                title: 'Images skipped',
-                message:
-                  'Observer agent is disabled, so images can\'t be analyzed. Set image_routing to "direct" to send images to your model, or enable observer.',
-                variant: 'warning',
-                duration: TOAST_DURATION_MS,
-              },
-            })
-            .then(() => {
-              // Only advance the debounce window on a successful toast
-              // so a failed attempt doesn't suppress the next warning.
-              // Greptile: "Failed Toast Starts Debounce Window".
-              lastImageSkippedToastByDir.set(ctx.directory, now);
-            })
-            .catch(() => {});
-        }
-      }
 
       // Repair session mappings before reminder gates; nudge metadata precedes phase dedup.
       await taskSessionManagerHook['experimental.chat.messages.transform'](
@@ -1349,6 +1271,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.after': async (input, output) => {
+      backgroundTaskTrace.observeTaskToolAfter(input, output);
       await postFileToolNudgeAfter(input, output);
       await delegateTaskRetryAfter(input, output);
       await jsonErrorRecoveryAfter(input, output);

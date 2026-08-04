@@ -39,7 +39,6 @@ export interface CmuxSessionLifecycleOptions {
   shutdownTimeoutMs?: number;
   isServerRunning?: (url: string) => Promise<boolean>;
   fetchStatuses?: () => Promise<Record<string, { type: string }>>;
-  permanentlyClosedSessions?: Set<string>;
 }
 
 const ACTIVITY_EVENTS = new Set([
@@ -79,7 +78,6 @@ export class CmuxSessionLifecycle {
   private cleanupPromise?: Promise<void>;
   private disposed = false;
   private spawnGeneration = 0;
-  private readonly permanentlyClosedSessions?: Set<string>;
 
   constructor(
     private readonly owner: string,
@@ -90,7 +88,6 @@ export class CmuxSessionLifecycle {
     options: CmuxSessionLifecycleOptions = {},
   ) {
     this.now = options.now ?? Date.now;
-    this.permanentlyClosedSessions = options.permanentlyClosedSessions;
     this.injectedDelay = Boolean(options.delay);
     this.delay =
       options.delay ??
@@ -125,7 +122,6 @@ export class CmuxSessionLifecycle {
     if (event.type !== 'session.created') return;
     const info = event.properties?.info;
     if (!info?.id || !info.parentID) return;
-    if (this.permanentlyClosedSessions?.has(info.id)) return;
     const now = this.now();
     const record: CmuxSessionRecord = {
       session: info.id,
@@ -169,12 +165,7 @@ export class CmuxSessionLifecycle {
       this.activity(session);
       this.backgroundJobs?.clearDeferredClose(session);
       const record = this.store.get(session);
-      if (
-        status === 'busy' &&
-        record &&
-        record.lifecycle === 'active' &&
-        !record.paneId
-      )
+      if (status === 'busy' && record && !record.paneId)
         await this.spawn(record);
     }
     if (owned.paneId) this.startPolling();
@@ -203,21 +194,6 @@ export class CmuxSessionLifecycle {
     if (record?.paneId && record.owner === this.owner) this.startPolling();
   }
 
-  async closeSessionPermanentlyFromCoordinator(session: string): Promise<void> {
-    if (this.disposed) return;
-    this.permanentlyClosedSessions?.add(session);
-    const record = this.store.get(session);
-    if (!record || record.owner !== this.owner) return;
-    record.lifecycle = 'deleted';
-    this.cancelDeferred(record);
-    this.backgroundJobs?.clearDeferredClose(session);
-    if (!record.paneId) {
-      if (!record.spawnPromise) this.store.removeWithoutPane(session);
-      return;
-    }
-    await this.requestClose(record, 'deleted');
-  }
-
   cleanup(): Promise<void> {
     this.cleanupPromise ??= this.runCleanup();
     return this.cleanupPromise;
@@ -232,13 +208,7 @@ export class CmuxSessionLifecycle {
     record: CmuxSessionRecord,
     deferred = false,
   ): Promise<void> {
-    if (
-      this.disposed ||
-      record.owner !== this.owner ||
-      record.lifecycle !== 'active' ||
-      this.permanentlyClosedSessions?.has(record.session)
-    )
-      return;
+    if (this.disposed || record.owner !== this.owner) return;
     if (record.spawnState === 'spawning' || record.paneId) return;
     const generation = this.spawnGeneration;
     const token = record.deferredSpawn?.generation;
@@ -248,11 +218,7 @@ export class CmuxSessionLifecycle {
     const result = await operation;
     if (record.spawnPromise === operation) record.spawnPromise = undefined;
     const current = this.store.get(record.session);
-    if (
-      this.disposed ||
-      generation !== this.spawnGeneration ||
-      this.permanentlyClosedSessions?.has(record.session)
-    ) {
+    if (this.disposed || generation !== this.spawnGeneration) {
       const latePane = result.paneId ?? result.orphanPaneId;
       if (latePane) await this.closeLatePane(record, latePane);
       else if (current && !current.paneId)
@@ -308,9 +274,6 @@ export class CmuxSessionLifecycle {
     if (!(await this.serverCheck(serverUrl))) {
       return { success: false, error: 'unavailable' as const };
     }
-    if (this.permanentlyClosedSessions?.has(record.session)) {
-      return { success: false, error: 'unavailable' as const };
-    }
     try {
       return await this.multiplexer.spawnPane(
         record.session,
@@ -343,8 +306,7 @@ export class CmuxSessionLifecycle {
         this.disposed ||
         this.store.get(record.session) !== record ||
         record.lifecycle !== 'active' ||
-        record.owner !== this.owner ||
-        this.permanentlyClosedSessions?.has(record.session)
+        record.owner !== this.owner
       )
         return;
       await this.spawn(record, true);

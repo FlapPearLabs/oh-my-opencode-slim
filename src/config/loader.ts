@@ -3,11 +3,7 @@ import * as path from 'node:path';
 import { stripJsonComments } from '../cli/config-io';
 import { getConfigSearchDirs } from '../cli/paths';
 import { DEFAULT_DISABLED_AGENTS } from './constants';
-import {
-  type PluginConfig,
-  PluginConfigSchema,
-  WebfetchConfigSchema,
-} from './schema';
+import { type PluginConfig, PluginConfigSchema } from './schema';
 
 /**
  * Warning kinds produced during config loading.
@@ -143,26 +139,6 @@ function loadConfigFromPath(
         console.warn(result.error.format());
       }
       return null;
-    }
-
-    // Zod applies webfetch.enabled's default while parsing each layer. Keep
-    // that default from masquerading as an explicitly configured override;
-    // the merged webfetch config is normalized after all layers are merged.
-    if (
-      result.data.webfetch &&
-      typeof rawConfig === 'object' &&
-      rawConfig !== null &&
-      'webfetch' in rawConfig &&
-      typeof rawConfig.webfetch === 'object' &&
-      rawConfig.webfetch !== null &&
-      !Array.isArray(rawConfig.webfetch) &&
-      !Object.hasOwn(rawConfig.webfetch, 'enabled')
-    ) {
-      const { enabled: _enabled, ...webfetch } = result.data.webfetch;
-      return {
-        ...result.data,
-        webfetch: webfetch as PluginConfig['webfetch'],
-      };
     }
 
     return result.data;
@@ -307,10 +283,6 @@ export function mergePluginConfigs(
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),
     fallback: deepMerge(base.fallback, override.fallback),
     council: deepMerge(base.council, override.council),
-    webfetch: deepMerge(
-      base.webfetch as Record<string, unknown> | undefined,
-      override.webfetch as Record<string, unknown> | undefined,
-    ) as PluginConfig['webfetch'],
     acpAgents: deepMerge(base.acpAgents, override.acpAgents),
     companion: deepMerge(
       base.companion as Record<string, unknown> | undefined,
@@ -392,10 +364,6 @@ export function loadPluginConfig(
     config = mergePluginConfigs(config, projectConfig);
   }
 
-  if (config.webfetch) {
-    config.webfetch = WebfetchConfigSchema.parse(config.webfetch);
-  }
-
   // Override preset from environment variable if set
   const envPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
   if (envPreset) {
@@ -446,11 +414,6 @@ export function loadPluginConfig(
     projectConfigPath ?? userConfigPath ?? '',
     options,
   );
-  // Note: we intentionally do NOT override image_routing to 'direct' here.
-  // The observer-disabled guard in processImageAttachments handles the
-  // auto+observer-disabled case by returning true, which triggers the
-  // debounced toast in index.ts. Overriding to 'direct' here would prevent
-  // processImageAttachments from returning true and suppress the toast.
 
   // Normalize disabled_* config keys to ensure they are arrays or undefined.
   // This loop is currently unreachable via the normal file-loading path:

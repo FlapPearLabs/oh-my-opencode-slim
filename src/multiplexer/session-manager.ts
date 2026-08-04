@@ -40,7 +40,6 @@ interface SharedSessionState {
   knownSessions: Map<string, KnownSession>;
   spawningSessions: Set<string>;
   closingSessions: Map<string, Promise<void>>;
-  permanentlyClosedSessions: Set<string>;
 }
 
 interface SessionEvent {
@@ -70,20 +69,14 @@ function getSharedState(): SharedSessionState {
     [SHARED_STATE_KEY]?: SharedSessionState;
   };
 
-  let state = globalWithState[SHARED_STATE_KEY];
-  if (!state) {
-    state = {
-      sessions: new Map(),
-      knownSessions: new Map(),
-      spawningSessions: new Set(),
-      closingSessions: new Map(),
-      permanentlyClosedSessions: new Set(),
-    };
-    globalWithState[SHARED_STATE_KEY] = state;
-  }
-  // Migrate state created by older plugin instances in this process.
-  state.permanentlyClosedSessions ??= new Set();
-  return state;
+  globalWithState[SHARED_STATE_KEY] ??= {
+    sessions: new Map(),
+    knownSessions: new Map(),
+    spawningSessions: new Set(),
+    closingSessions: new Map(),
+  };
+
+  return globalWithState[SHARED_STATE_KEY];
 }
 
 export function resetMultiplexerSessionManagerState(): void {
@@ -92,7 +85,6 @@ export function resetMultiplexerSessionManagerState(): void {
   state.knownSessions.clear();
   state.spawningSessions.clear();
   state.closingSessions.clear();
-  state.permanentlyClosedSessions.clear();
   new CmuxSessionStore().resetForTests();
 }
 
@@ -157,7 +149,6 @@ export class MultiplexerSessionManager {
   private knownSessions: SharedSessionState['knownSessions'];
   private spawningSessions: SharedSessionState['spawningSessions'];
   private closingSessions: SharedSessionState['closingSessions'];
-  private permanentlyClosedSessions: SharedSessionState['permanentlyClosedSessions'];
   private pollInterval?: ReturnType<typeof setInterval>;
   private enabled = false;
   private cmuxLifecycle?: CmuxSessionLifecycle;
@@ -173,7 +164,6 @@ export class MultiplexerSessionManager {
     this.knownSessions = sharedState.knownSessions;
     this.spawningSessions = sharedState.spawningSessions;
     this.closingSessions = sharedState.closingSessions;
-    this.permanentlyClosedSessions = sharedState.permanentlyClosedSessions;
 
     this.directory = ctx.directory;
     this.resolveServerUrl = createServerUrlResolver(ctx);
@@ -190,10 +180,7 @@ export class MultiplexerSessionManager {
         this.resolveServerUrl,
         this.directory,
         this.backgroundJobBoard,
-        {
-          ...options,
-          permanentlyClosedSessions: this.permanentlyClosedSessions,
-        },
+        options,
       );
     }
 
@@ -222,14 +209,6 @@ export class MultiplexerSessionManager {
     const title = info.title ?? 'Subagent';
     const directory = info.directory ?? this.directory;
 
-    if (this.permanentlyClosedSessions.has(sessionId)) {
-      log('[multiplexer-session-manager] ignoring permanently closed session', {
-        instanceId: this.instanceId,
-        sessionId,
-      });
-      return;
-    }
-
     if (this.isTrackedOrSpawning(sessionId)) {
       log('[multiplexer-session-manager] session already tracked or spawning', {
         instanceId: this.instanceId,
@@ -241,7 +220,6 @@ export class MultiplexerSessionManager {
     const closing = this.closingSessions.get(sessionId);
     if (closing) await closing;
 
-    if (this.permanentlyClosedSessions.has(sessionId)) return;
     if (this.isTrackedOrSpawning(sessionId)) return;
 
     this.knownSessions.set(sessionId, {
@@ -273,11 +251,7 @@ export class MultiplexerSessionManager {
         return;
       }
 
-      if (
-        this.permanentlyClosedSessions.has(sessionId) ||
-        this.closingSessions.has(sessionId) ||
-        this.sessions.has(sessionId)
-      ) {
+      if (this.closingSessions.has(sessionId) || this.sessions.has(sessionId)) {
         return;
       }
 
@@ -305,8 +279,7 @@ export class MultiplexerSessionManager {
 
       if (
         !this.knownSessions.has(sessionId) ||
-        this.closingSessions.has(sessionId) ||
-        this.permanentlyClosedSessions.has(sessionId)
+        this.closingSessions.has(sessionId)
       ) {
         await this.multiplexer.closePane(paneResult.paneId).catch((err) =>
           log(
@@ -615,11 +588,9 @@ export class MultiplexerSessionManager {
 
   private async respawnIfKnown(sessionId: string): Promise<void> {
     if (!this.enabled || !this.multiplexer) return;
-    if (this.permanentlyClosedSessions.has(sessionId)) return;
     const closing = this.closingSessions.get(sessionId);
     if (closing) await closing;
 
-    if (this.permanentlyClosedSessions.has(sessionId)) return;
     if (this.isTrackedOrSpawning(sessionId)) {
       return;
     }
@@ -654,11 +625,7 @@ export class MultiplexerSessionManager {
         return;
       }
 
-      if (
-        this.permanentlyClosedSessions.has(sessionId) ||
-        this.sessions.has(sessionId) ||
-        this.closingSessions.has(sessionId)
-      ) {
+      if (this.sessions.has(sessionId) || this.closingSessions.has(sessionId)) {
         return;
       }
 
@@ -686,8 +653,7 @@ export class MultiplexerSessionManager {
 
       if (
         !this.knownSessions.has(sessionId) ||
-        this.closingSessions.has(sessionId) ||
-        this.permanentlyClosedSessions.has(sessionId)
+        this.closingSessions.has(sessionId)
       ) {
         await this.multiplexer.closePane(paneResult.paneId).catch((err) =>
           log(
@@ -761,26 +727,8 @@ export class MultiplexerSessionManager {
     await this.closeSession(sessionId, 'idle', true);
   }
 
-  /** Permanently close a wall-clock timed-out pane and block late busy respawn. */
-  async closeSessionPermanentlyFromCoordinator(
-    sessionId: string,
-  ): Promise<void> {
-    if (this.cmuxLifecycle) {
-      return this.cmuxLifecycle.closeSessionPermanentlyFromCoordinator(
-        sessionId,
-      );
-    }
-    if (!this.enabled) return;
-    this.permanentlyClosedSessions.add(sessionId);
-    await this.closeSession(sessionId, 'deleted', true);
-  }
-
   async cleanup(): Promise<void> {
-    if (this.cmuxLifecycle) {
-      await this.cmuxLifecycle.cleanup();
-      this.permanentlyClosedSessions.clear();
-      return;
-    }
+    if (this.cmuxLifecycle) return this.cmuxLifecycle.cleanup();
     this.stopPolling();
 
     if (this.closingSessions.size > 0) {
@@ -807,7 +755,6 @@ export class MultiplexerSessionManager {
     this.knownSessions.clear();
     this.spawningSessions.clear();
     this.closingSessions.clear();
-    this.permanentlyClosedSessions.clear();
     // ponytail: deferred state lives in coordinator, not here
     // Note: coordinator has same lifetime as plugin, so no explicit cleanup needed
 

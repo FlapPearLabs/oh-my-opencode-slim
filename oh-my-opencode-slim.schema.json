@@ -1059,28 +1059,6 @@
           "default": false,
           "description": "Beta opt-in. When true, idle orchestrator sessions with incomplete todos may receive one automatic hidden continuation prompt. Disabled by default; idle reconciliation and background-job orchestration continue without automatic continuation prompts.",
           "type": "boolean"
-        },
-        "wallClockTimeoutMs": {
-          "default": 0,
-          "description": "Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. 0 disables supervision; finite values are 60,000–2,147,483,647ms.",
-          "anyOf": [
-            {
-              "type": "number",
-              "const": 0
-            },
-            {
-              "type": "integer",
-              "minimum": 60000,
-              "maximum": 2147483647
-            }
-          ]
-        },
-        "abortGraceMs": {
-          "default": 10000,
-          "description": "Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).",
-          "type": "integer",
-          "minimum": 1000,
-          "maximum": 60000
         }
       }
     },
@@ -1206,50 +1184,6 @@
           "type": "boolean"
         }
       }
-    },
-    "webfetch": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "default": true,
-          "description": "When false, skip registering this enhanced webfetch so OpenCode uses its built-in version.",
-          "type": "boolean"
-        },
-        "model": {
-          "description": "Dedicated model(s) for smartfetch secondary-model summarization. Same shape as agent model config (string, array of strings/objects with id+variant). Takes priority over small_model, agents.explorer.model, and agents.librarian.model.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "minItems": 1,
-              "type": "array",
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string"
-                      },
-                      "variant": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "id"
-                    ]
-                  }
-                ]
-              }
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
     },
     "acpAgents": {
       "type": "object",
