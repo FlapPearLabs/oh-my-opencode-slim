@@ -5,35 +5,21 @@
   "evals": [
     {
       "id": "trivial-edit-direct",
-      "prompt": "Add a newline at the end of README.md",
+      "prompt": "Add a one-line comment to the top of src/cli/eval.ts explaining what this file does",
       "agent": "orchestrator",
       "description": "Trivial single-file edit should be handled directly, not delegated",
       "assertions": [
         {
           "type": "not_contains",
           "value": "@fixer",
-          "description": "Should not delegate a trivial edit"
+          "description": "Should not delegate a trivial comment addition"
         }
       ],
       "tags": ["routing", "trivial"]
     },
     {
-      "id": "ui-work-to-designer",
-      "prompt": "Redesign the settings page with a dark mode toggle, better spacing, and responsive layout",
-      "agent": "orchestrator",
-      "description": "UI/UX work should route to @designer",
-      "assertions": [
-        {
-          "type": "contains",
-          "value": "@designer",
-          "description": "Should delegate UI work to @designer"
-        }
-      ],
-      "tags": ["routing", "design"]
-    },
-    {
       "id": "multi-file-to-fixer",
-      "prompt": "Refactor the logger in src/utils/logger.ts to support log levels (debug, info, warn, error). Update all callers across the codebase.",
+      "prompt": "Refactor the error handling in src/hooks/ to use a consistent pattern across all hooks. Right now each hook handles errors differently.",
       "agent": "orchestrator",
       "description": "Multi-file implementation should route to @fixer",
       "assertions": [
@@ -47,7 +33,7 @@
     },
     {
       "id": "architecture-to-oracle",
-      "prompt": "Should we migrate from REST to GraphQL for the public API? What are the tradeoffs?",
+      "prompt": "Should we switch the background job board from in-memory storage to SQLite? What are the tradeoffs for this plugin?",
       "agent": "orchestrator",
       "description": "Architecture decision should route to @oracle",
       "assertions": [
@@ -61,7 +47,7 @@
     },
     {
       "id": "external-docs-to-librarian",
-      "prompt": "Look up the latest React 19 Server Components API and how they differ from Next.js App Router",
+      "prompt": "Look up how the Anthropic SDK handles streaming responses and what the latest API changes are",
       "agent": "orchestrator",
       "description": "External library research should route to @librarian",
       "assertions": [
@@ -72,6 +58,20 @@
         }
       ],
       "tags": ["routing", "research"]
+    },
+    {
+      "id": "codebase-search-to-explorer",
+      "prompt": "Find all the places where we call emitEvent in the codebase",
+      "agent": "orchestrator",
+      "description": "Codebase search should route to @explorer",
+      "assertions": [
+        {
+          "type": "contains",
+          "value": "@explorer",
+          "description": "Should delegate codebase search to @explorer"
+        }
+      ],
+      "tags": ["routing", "search"]
     },
     {
       "id": "reflect-progressive-disclosure",
