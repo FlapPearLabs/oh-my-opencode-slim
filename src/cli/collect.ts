@@ -7,15 +7,16 @@
  * then writes the collected outputs to a JSON file ready for `bun run eval`.
  *
  * Usage:
- *   bun run collect --suite orchestrator-routing --out /tmp/outputs.json
- *   bun run collect --suite complexity-classifier --runs 3 --out /tmp/cc.json
+ *   bun run collect [--suite <name>] --out /tmp/outputs.json
+ *   bun run collect [--suite <name>] --runs 3 --out /tmp/cc.json
  *
- * --runs N: collect N responses per eval case (for multi-run pass rates).
- *            Default 1.
+ * --suite is optional: if exactly one eval suite exists it is used
+ * automatically. --runs N: collect N responses per eval case (for
+ * multi-run pass rates). Default 1.
  */
 
 import { parseArgs } from 'node:util';
-import { loadEvalSuite } from '../evals/runner';
+import { loadEvalSuite, loadEvalSuites } from '../evals/runner';
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -29,10 +30,21 @@ const { values } = parseArgs({
 });
 
 if (!values.suite) {
-  console.error(
-    'Usage: bun run collect --suite <name> --out <path> [--runs N]',
-  );
-  process.exit(1);
+  const suites = loadEvalSuites();
+  if (suites.length === 1) {
+    values.suite = suites[0].name;
+  } else if (suites.length > 1) {
+    console.error(
+      `Multiple suites found: ${suites.map((s) => s.name).join(', ')}`,
+    );
+    console.error('Usage: bun run collect --suite <name> --out <path>');
+    process.exit(1);
+  } else {
+    console.error(
+      'Usage: bun run collect --suite <name> --out <path> [--runs N]',
+    );
+    process.exit(1);
+  }
 }
 
 const suite = loadEvalSuite(values.suite);

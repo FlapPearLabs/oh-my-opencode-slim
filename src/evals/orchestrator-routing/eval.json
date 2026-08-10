@@ -5,14 +5,14 @@
   "evals": [
     {
       "id": "trivial-edit-direct",
-      "prompt": "Fix the typo in README.md where 'teh' should be 'the'",
+      "prompt": "Add a newline at the end of README.md",
       "agent": "orchestrator",
       "description": "Trivial single-file edit should be handled directly, not delegated",
       "assertions": [
         {
           "type": "not_contains",
           "value": "@fixer",
-          "description": "Should not delegate a trivial typo fix"
+          "description": "Should not delegate a trivial edit"
         }
       ],
       "tags": ["routing", "trivial"]
@@ -75,7 +75,7 @@
     },
     {
       "id": "reflect-progressive-disclosure",
-      "prompt": "Review recent work and suggest reusable workflow improvements",
+      "prompt": "I keep running the same manual checks before every release. Look at my recent sessions and tell me what I should turn into reusable commands or skills.",
       "agent": "orchestrator",
       "description": "Should trigger @reflect skill and read its reference file for detailed patterns",
       "assertions": [
@@ -90,7 +90,7 @@
     },
     {
       "id": "clonedeps-progressive-disclosure",
-      "prompt": "Clone important dependency source for local inspection",
+      "prompt": "I'm debugging why the SDK handles tool calls differently than expected. Clone the opencode SDK source so I can inspect how it actually works internally.",
       "agent": "orchestrator",
       "description": "Should trigger @clonedeps skill and read its reference file",
       "assertions": [
@@ -105,7 +105,7 @@
     },
     {
       "id": "verification-planning-progressive-disclosure",
-      "prompt": "Plan credible, proportionate evidence before non-trivial implementation",
+      "prompt": "I'm about to refactor the prompt cache to a different invalidation strategy. Plan how I should verify the change actually works before I ship it.",
       "agent": "orchestrator",
       "description": "Should trigger @verification-planning skill and read its reference file",
       "assertions": [
@@ -120,7 +120,7 @@
     },
     {
       "id": "deepwork-progressive-disclosure",
-      "prompt": "Heavy/complex coding sessions and large modifications workflow",
+      "prompt": "We're migrating the plugin from CommonJS to ESM — it touches every module and can't be shipped half-done. Manage this as a phased effort with reviews between phases.",
       "agent": "orchestrator",
       "description": "Should trigger @deepwork skill and read its reference file",
       "assertions": [

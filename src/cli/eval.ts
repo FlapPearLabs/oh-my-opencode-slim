@@ -3,8 +3,11 @@
  * CLI entry point for running eval suites.
  *
  * Usage:
- *   bun run eval --suite <name> --outputs-file <path>
- *   bun run eval --suite orchestrator-routing --outputs-file /tmp/outputs.json
+ *   bun run eval [--suite <name>] --outputs-file <path>
+ *   bun run eval [--suite <name>] --outputs-file /tmp/outputs.json
+ *
+ * --suite is optional: if exactly one eval suite exists it is used
+ * automatically.
  *
  * outputs.json format:
  *   { "eval-id-1": "agent output text", "eval-id-2": ["run1", "run2"] }
@@ -14,7 +17,12 @@
  */
 
 import { parseArgs } from 'node:util';
-import { executeSuite, formatResult, saveResults } from '../evals/runner';
+import {
+  executeSuite,
+  formatResult,
+  loadEvalSuites,
+  saveResults,
+} from '../evals/runner';
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -27,8 +35,19 @@ const { values } = parseArgs({
 });
 
 if (!values.suite) {
-  console.error('Usage: bun run eval --suite <name> --outputs-file <path>');
-  process.exit(1);
+  const suites = loadEvalSuites();
+  if (suites.length === 1) {
+    values.suite = suites[0].name;
+  } else if (suites.length > 1) {
+    console.error(
+      `Multiple suites found: ${suites.map((s) => s.name).join(', ')}`,
+    );
+    console.error('Usage: bun run eval --suite <name> --outputs-file <path>');
+    process.exit(1);
+  } else {
+    console.error('Usage: bun run eval --suite <name> --outputs-file <path>');
+    process.exit(1);
+  }
 }
 
 let outputs: Record<string, string | string[]> = {};

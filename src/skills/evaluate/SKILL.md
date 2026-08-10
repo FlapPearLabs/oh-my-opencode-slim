@@ -8,7 +8,14 @@ description: Run the eval suite to verify orchestrator routing and progressive d
 ## Run
 
 ```bash
-# Collect agent outputs interactively
+# Validate eval cases before running
+bun run precheck
+
+# Run with default suite
+bun run collect --out /tmp/outputs.json
+bun run eval --outputs-file /tmp/outputs.json
+
+# Or specify suite explicitly
 bun run collect --suite orchestrator-routing --out /tmp/outputs.json
 
 # Run evals against collected outputs
