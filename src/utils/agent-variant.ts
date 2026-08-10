@@ -20,6 +20,13 @@ export function normalizeAgentName(agentName: string): string {
   return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
 }
 
+// ponytail: hardcoded list — agent registry doesn't expose write/read classification
+const WRITE_AGENTS = new Set(['fixer', 'designer']);
+
+export function isWriteAgent(agent: string): boolean {
+  return WRITE_AGENTS.has(agent);
+}
+
 function getRuntimeAgentNames(runtime: RuntimeConfig): string[] {
   const unique = new Set<string>([
     ...ALL_AGENT_NAMES,

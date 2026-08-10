@@ -1,0 +1,45 @@
+{
+  "name": "fixer-execution",
+  "description": "Evals for fixer agent behavior — does it execute bounded tasks correctly?",
+  "version": "1.0.0",
+  "evals": [
+    {
+      "id": "no-research",
+      "prompt": "Add a validateEmail function to src/utils/validation.ts that checks for valid email format using regex",
+      "agent": "fixer",
+      "description": "Fixer should implement directly without spawning subagents or doing research",
+      "assertions": [
+        {
+          "type": "not_contains",
+          "value": "@librarian",
+          "description": "Should not delegate research"
+        },
+        {
+          "type": "not_contains",
+          "value": "@explorer",
+          "description": "Should not delegate discovery"
+        }
+      ],
+      "tags": ["execution", "constraints"]
+    },
+    {
+      "id": "output-format",
+      "prompt": "Add a helloWorld function to src/utils/helpers.ts that returns the string 'Hello, World!'",
+      "agent": "fixer",
+      "description": "Fixer output should include summary, changes, and verification sections",
+      "assertions": [
+        {
+          "type": "structure",
+          "value": "<summary>",
+          "description": "Output should have <summary> section"
+        },
+        {
+          "type": "structure",
+          "value": "<changes>",
+          "description": "Output should have <changes> section"
+        }
+      ],
+      "tags": ["execution", "output"]
+    }
+  ]
+}

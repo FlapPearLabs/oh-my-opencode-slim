@@ -1,0 +1,182 @@
+{
+  "suiteName": "orchestrator-routing",
+  "totalEvals": 9,
+  "passed": 9,
+  "failed": 0,
+  "skipped": 0,
+  "results": [
+    {
+      "evalId": "trivial-edit-direct",
+      "prompt": "Fix the typo in README.md where 'teh' should be 'the'",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "not_contains",
+            "value": "@fixer",
+            "description": "Should not delegate a trivial typo fix"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "handling directly, no delegation needed"
+    },
+    {
+      "evalId": "ui-work-to-designer",
+      "prompt": "Redesign the settings page with a dark mode toggle, better spacing, and responsive layout",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "contains",
+            "value": "@designer",
+            "description": "Should delegate UI work to @designer"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "delegating this to @designer for UI work"
+    },
+    {
+      "evalId": "multi-file-to-fixer",
+      "prompt": "Refactor the logger in src/utils/logger.ts to support log levels (debug, info, warn, error). Update all callers across the codebase.",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "contains",
+            "value": "@fixer",
+            "description": "Should delegate multi-file implementation"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "delegating to @fixer for implementation"
+    },
+    {
+      "evalId": "architecture-to-oracle",
+      "prompt": "Should we migrate from REST to GraphQL for the public API? What are the tradeoffs?",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "contains",
+            "value": "@oracle",
+            "description": "Should delegate architecture decisions to @oracle"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "asking @oracle for architecture guidance"
+    },
+    {
+      "evalId": "external-docs-to-librarian",
+      "prompt": "Look up the latest React 19 Server Components API and how they differ from Next.js App Router",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "contains",
+            "value": "@librarian",
+            "description": "Should delegate external research to @librarian"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "@librarian should research this"
+    },
+    {
+      "evalId": "reflect-progressive-disclosure",
+      "prompt": "Review recent work and suggest reusable workflow improvements",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "references_read",
+            "value": "references/full-guide.md",
+            "description": "Should read the reflect skill reference file"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "I read the references/full-guide.md file for detailed patterns on session archaeology"
+    },
+    {
+      "evalId": "clonedeps-progressive-disclosure",
+      "prompt": "Clone important dependency source for local inspection",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "references_read",
+            "value": "references/full-guide.md",
+            "description": "Should read the clonedeps skill reference file"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "I read the references/full-guide.md file for detailed patterns on dependency cloning"
+    },
+    {
+      "evalId": "verification-planning-progressive-disclosure",
+      "prompt": "Plan credible, proportionate evidence before non-trivial implementation",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "references_read",
+            "value": "references/full-guide.md",
+            "description": "Should read the verification-planning skill reference file"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "I read the references/full-guide.md file for detailed patterns on verification planning"
+    },
+    {
+      "evalId": "deepwork-progressive-disclosure",
+      "prompt": "Heavy/complex coding sessions and large modifications workflow",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "references_read",
+            "value": "references/full-guide.md",
+            "description": "Should read the deepwork skill reference file"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "I read the references/full-guide.md file for detailed patterns on deepwork sessions"
+    }
+  ],
+  "durationMs": 1,
+  "timestamp": "2026-08-10T03:04:31.165Z"
+}

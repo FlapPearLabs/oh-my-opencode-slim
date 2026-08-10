@@ -26,4 +26,4 @@ export const BINARY_PREFIXES = [
 ];
 
 export const WEBFETCH_DESCRIPTION =
-  'Fetch a URL with better extraction for static/docs pages. Supports llms.txt probing, content-focused HTML extraction, metadata, redirects, and an optional prompt processed by a cheap secondary model.';
+  'Fetch a URL and extract readable content. Use for documentation, API references, blog posts, and static pages. NOT for dynamic SPAs, authenticated content, or pages requiring JavaScript execution. Returns markdown by default; use format="html" for raw markup. Optional prompt field runs a cheap secondary model to extract specific information from the fetched content.';

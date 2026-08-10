@@ -6,10 +6,11 @@ describe('orchestrator prompt', () => {
     const prompt = buildOrchestratorPrompt();
 
     expect(prompt).toContain('use the `question` tool');
-    expect(prompt).toContain('Enable custom input');
-    expect(prompt).toContain('concise pasted response or command output');
+    expect(prompt).toContain('blocking user input');
     expect(prompt).toContain('small bounded set of options');
-    expect(prompt).toContain('ordinary dialogue that does not block work');
+    expect(prompt).toContain(
+      'Ask targeted questions when requests are ambiguous',
+    );
   });
 
   test('requires wait_for_user for external manual work', () => {

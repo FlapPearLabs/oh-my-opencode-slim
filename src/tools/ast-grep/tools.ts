@@ -20,8 +20,8 @@ export const ast_grep_search: ToolDefinition = tool({
     'Search code patterns across filesystem using AST-aware matching. Supports 25 languages. ' +
     'Use meta-variables: $VAR (single node), $$$ (multiple nodes). ' +
     'IMPORTANT: Patterns must be complete AST nodes (valid code). ' +
-    "For functions, include params and body: 'export async function $NAME($$$) { $$$ }' not 'export async function $NAME'. " +
-    "Examples: 'console.log($MSG)', 'def $FUNC($$$):', 'async function $NAME($$$)'",
+    'For functions, include params and body — do not omit the body or parameters. ' +
+    'Use for finding code structure, not text patterns. Prefer this over grep for code searches.',
   args: {
     pattern: tool.schema
       .string()
@@ -75,7 +75,8 @@ export const ast_grep_replace: ToolDefinition = tool({
   description:
     'Replace code patterns across filesystem with AST-aware rewriting. ' +
     'Dry-run by default. Use meta-variables in rewrite to preserve matched content. ' +
-    "Example: pattern='console.log($MSG)' rewrite='logger.info($MSG)'",
+    'Use for safe, structural rewrites where text replacement would be risky. ' +
+    'Preview changes before applying.',
   args: {
     pattern: tool.schema.string().describe('AST pattern to match'),
     rewrite: tool.schema

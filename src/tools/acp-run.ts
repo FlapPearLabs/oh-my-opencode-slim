@@ -277,7 +277,7 @@ class AcpClient {
 export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
   return tool({
     description:
-      'Run a configured external ACP-compatible coding agent and return its streamed result. Use for configured ACP agents such as Claude Code ACP, Gemini ACP, or custom ACP servers.',
+      'Run a configured external ACP-compatible coding agent and return its streamed result. Use when delegating to an external agent with different capabilities (e.g., Claude Code for deep reasoning, Gemini for large context). NOT for tasks the orchestrator can handle directly. Requires the agent to be configured in oh-my-opencode-slim.json under acp.agents.',
     args: {
       agent: z.string().describe('Configured ACP agent name'),
       prompt: z.string().describe('Task or question to send to the ACP agent'),

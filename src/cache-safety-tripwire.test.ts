@@ -78,6 +78,10 @@ const ALLOWLIST = new Map<string, string>([
     'hooks/auto-update-checker/checker.ts',
     'Date.now()/Math.random() compose a per-run temp token for install bookkeeping; it names local directories and never reaches the prompt prefix.',
   ],
+  [
+    'hooks/task-session-manager/tool-execute-hooks.ts',
+    'new Date().toISOString() timestamps observability events written to JSONL; never reaches the prompt prefix.',
+  ],
 ]);
 
 async function scanForViolations(): Promise<string[]> {

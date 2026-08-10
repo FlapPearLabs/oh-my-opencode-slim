@@ -1,0 +1,137 @@
+{
+  "name": "orchestrator-routing",
+  "description": "Evals for orchestrator delegation decisions — does it route to the right agent?",
+  "version": "1.0.0",
+  "evals": [
+    {
+      "id": "trivial-edit-direct",
+      "prompt": "Fix the typo in README.md where 'teh' should be 'the'",
+      "agent": "orchestrator",
+      "description": "Trivial single-file edit should be handled directly, not delegated",
+      "assertions": [
+        {
+          "type": "not_contains",
+          "value": "@fixer",
+          "description": "Should not delegate a trivial typo fix"
+        }
+      ],
+      "tags": ["routing", "trivial"]
+    },
+    {
+      "id": "ui-work-to-designer",
+      "prompt": "Redesign the settings page with a dark mode toggle, better spacing, and responsive layout",
+      "agent": "orchestrator",
+      "description": "UI/UX work should route to @designer",
+      "assertions": [
+        {
+          "type": "contains",
+          "value": "@designer",
+          "description": "Should delegate UI work to @designer"
+        }
+      ],
+      "tags": ["routing", "design"]
+    },
+    {
+      "id": "multi-file-to-fixer",
+      "prompt": "Refactor the logger in src/utils/logger.ts to support log levels (debug, info, warn, error). Update all callers across the codebase.",
+      "agent": "orchestrator",
+      "description": "Multi-file implementation should route to @fixer",
+      "assertions": [
+        {
+          "type": "contains",
+          "value": "@fixer",
+          "description": "Should delegate multi-file implementation"
+        }
+      ],
+      "tags": ["routing", "implementation"]
+    },
+    {
+      "id": "architecture-to-oracle",
+      "prompt": "Should we migrate from REST to GraphQL for the public API? What are the tradeoffs?",
+      "agent": "orchestrator",
+      "description": "Architecture decision should route to @oracle",
+      "assertions": [
+        {
+          "type": "contains",
+          "value": "@oracle",
+          "description": "Should delegate architecture decisions to @oracle"
+        }
+      ],
+      "tags": ["routing", "architecture"]
+    },
+    {
+      "id": "external-docs-to-librarian",
+      "prompt": "Look up the latest React 19 Server Components API and how they differ from Next.js App Router",
+      "agent": "orchestrator",
+      "description": "External library research should route to @librarian",
+      "assertions": [
+        {
+          "type": "contains",
+          "value": "@librarian",
+          "description": "Should delegate external research to @librarian"
+        }
+      ],
+      "tags": ["routing", "research"]
+    },
+    {
+      "id": "reflect-progressive-disclosure",
+      "prompt": "Review recent work and suggest reusable workflow improvements",
+      "agent": "orchestrator",
+      "description": "Should trigger @reflect skill and read its reference file for detailed patterns",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "references/full-guide.md",
+          "description": "Should read the reflect skill reference file",
+          "referenceContent": "Session Archaeology (--sessions mode)"
+        }
+      ],
+      "tags": ["progressive-disclosure", "reflect"]
+    },
+    {
+      "id": "clonedeps-progressive-disclosure",
+      "prompt": "Clone important dependency source for local inspection",
+      "agent": "orchestrator",
+      "description": "Should trigger @clonedeps skill and read its reference file",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "references/full-guide.md",
+          "description": "Should read the clonedeps skill reference file",
+          "referenceContent": "Librarian Clone Plan Prompt"
+        }
+      ],
+      "tags": ["progressive-disclosure", "clonedeps"]
+    },
+    {
+      "id": "verification-planning-progressive-disclosure",
+      "prompt": "Plan credible, proportionate evidence before non-trivial implementation",
+      "agent": "orchestrator",
+      "description": "Should trigger @verification-planning skill and read its reference file",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "references/full-guide.md",
+          "description": "Should read the verification-planning skill reference file",
+          "referenceContent": "Frame the claim"
+        }
+      ],
+      "tags": ["progressive-disclosure", "verification-planning"]
+    },
+    {
+      "id": "deepwork-progressive-disclosure",
+      "prompt": "Heavy/complex coding sessions and large modifications workflow",
+      "agent": "orchestrator",
+      "description": "Should trigger @deepwork skill and read its reference file",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "references/full-guide.md",
+          "description": "Should read the deepwork skill reference file",
+          "referenceContent": "Detailed Core Contract"
+        }
+      ],
+      "tags": ["progressive-disclosure", "deepwork"]
+    }
+  ]
+}

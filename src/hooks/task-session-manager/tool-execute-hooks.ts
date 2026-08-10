@@ -19,10 +19,12 @@ import {
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import { SESSION_ID_PATTERN } from '../../utils/session';
+import { emitEvent } from '../observability';
 import { isMissingRememberedSessionError } from './board-injection';
 import type { PendingTaskCall } from './pending-call-tracker';
 import { normalizeLateCancelledTaskOutput } from './status-utils';
 import { extractReadFiles } from './task-context-tracker';
+
 
 interface TaskArgs {
   description?: unknown;
@@ -135,6 +137,14 @@ export async function handleToolExecuteBefore(
   }
 
   deps.pendingCallTracker.add(pendingCall);
+  emitEvent({
+    kind: 'delegation_started',
+    timestamp: new Date().toISOString(),
+    sessionId: input.sessionID,
+    agent: pendingCall.agentType,
+    taskDescription: pendingCall.label,
+    background: pendingCall.background,
+  });
   log(
     '[task-session-manager] tool.execute.before task — pending call created',
     {
@@ -262,6 +272,27 @@ export async function handleToolExecuteAfter(
       agent: pending.agentType,
       state: updated?.state ?? record.state,
     });
+    if (status.state === 'completed') {
+      emitEvent({
+        kind: 'delegation_completed',
+        timestamp: new Date().toISOString(),
+        sessionId: input.sessionID,
+        agent: pending.agentType,
+        taskId: status.taskID,
+        durationMs: 0,
+        success: true,
+      });
+    } else if (status.state === 'error' || status.state === 'cancelled') {
+      emitEvent({
+        kind: 'delegation_failed',
+        timestamp: new Date().toISOString(),
+        sessionId: input.sessionID,
+        agent: pending.agentType,
+        taskId: status.taskID,
+        durationMs: 0,
+        error: status.result ?? status.state,
+      });
+    }
     if (pending.resumedTaskId && pending.resumedTaskId !== status.taskID) {
       deps.backgroundJobBoard.drop(pending.resumedTaskId);
       deps.backgroundJobSupervisor?.drop(pending.resumedTaskId);

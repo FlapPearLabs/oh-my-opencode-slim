@@ -15,9 +15,10 @@
     }
   },
   "bin": {
-    "oh-my-opencode-slim": "./dist/cli/index.js"
+    "oh-my-opencode-slim": "./dist/cli/index.js",
+    "lint": "biome lint .",
+    "format": "biome format . --write"
   },
-  "type": "module",
   "license": "MIT",
   "keywords": [
     "opencode",
@@ -65,10 +66,12 @@
     "cache:smoke": "bun run scripts/cache-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "eval": "bun run src/cli/eval.ts",
+    "collect": "bun run src/cli/collect.ts",
     "lint": "biome lint .",
     "format": "biome format . --write",
-    "check": "biome check --write .",
-    "check:ci": "biome check .",
+    "ci:eval": "bun run eval --suite orchestrator-routing --outputs-file /tmp/eval-outputs.json",
+    "check:ci": "biome check . && bun run ci:eval",
     "dev": "bun run build && opencode",
     "prepublishOnly": "bun run build",
     "release:patch": "npm version patch && git push --follow-tags && npm publish",

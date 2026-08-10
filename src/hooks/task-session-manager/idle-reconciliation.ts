@@ -11,6 +11,7 @@ export function createIdleReconciler(options: {
   /** Called when a deferred inline error is terminalized at idle. */
   onErrorTerminalize?: (sessionID: string) => void;
   idleReconcileDelayMs: number;
+  directory: string;
   isFallbackInProgress?: (sessionID: string) => boolean;
   hasInputWait: (sessionID: string) => boolean;
   getContinuationSessionToken: (sessionID: string) => symbol;

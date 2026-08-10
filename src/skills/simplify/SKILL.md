@@ -5,132 +5,34 @@ description: Simplifies code for clarity without changing behavior. Use for read
 
 # Code Simplification
 
-## Overview
-
-Simplify code by reducing complexity while preserving exact behavior. The goal is not fewer lines - it's code that is easier to read, understand, modify, and debug. Every simplification must pass a simple test: "Would a new team member understand this faster than the original?"
+Simplify code by reducing complexity while preserving exact behavior. The goal is not fewer lines — it's code that is easier to read, understand, modify, and debug.
 
 ## When to Use
 
-- After a feature is working and tests pass, but the implementation feels heavier than it needs to be
+- After a feature is working and tests pass, but implementation feels heavier than needed
 - During code review when readability or complexity issues are flagged
 - When you encounter deeply nested logic, long functions, or unclear names
-- When refactoring code written under time pressure
 - When consolidating related logic scattered across files
-- After merging changes that introduced duplication or inconsistency
 
 **When NOT to use:**
 
-- Code is already clean and readable - don't simplify for the sake of it
-- You don't understand what the code does yet - comprehend before you simplify
-- The code is performance-critical and the "simpler" version would be measurably slower
-- You're about to rewrite the module entirely - simplifying throwaway code wastes effort
+- Code is already clean — don't simplify for the sake of it
+- You don't understand what the code does yet — comprehend first
+- The code is performance-critical and "simpler" version would be measurably slower
+- You're about to rewrite the module entirely
 
-## The Five Principles
+## Five Principles
 
-### 1. Preserve Behavior Exactly
+1. **Preserve behavior exactly** — same outputs, errors, side effects, edge cases
+2. **Follow project conventions** — match codebase style, not external preferences
+3. **Prefer clarity over cleverness** — explicit > compact when compact requires mental pause
+4. **Maintain balance** — don't inline meaningful names, merge unrelated logic, or remove testability abstractions
+5. **Scope to what changed** — avoid unrelated drive-by refactors
 
-Don't change what the code does - only how it expresses it. All inputs, outputs, side effects, error behavior, and edge cases must remain identical. If you're not sure a simplification preserves behavior, don't make it.
+## Key Rules
 
-Before every change, ask:
+- Understand before touching — know responsibility, callers, callees, edge cases, tests
+- One simplification at a time — make change, verify, keep only when evidence supports
+- Verify the result — code genuinely easier to understand, diff clean, conventions match
 
-- Does this produce the same output for every input?
-- Does this maintain the same error behavior?
-- Does this preserve the same side effects and ordering?
-- What proportionate final-state verification will reveal a behavior change?
-
-### 2. Follow Project Conventions
-
-Simplification means making code more consistent with the codebase, not imposing external preferences.
-
-Before simplifying:
-
-1. Read `AGENTS.md` / project conventions
-2. Study how neighboring code handles similar patterns
-3. Match the project's style for imports, naming, function style, error handling, and type annotations
-
-Simplification that breaks project consistency is not simplification - it's churn.
-
-### 3. Prefer Clarity Over Cleverness
-
-Explicit code is better than compact code when the compact version requires a mental pause to parse.
-
-- Replace nested ternaries with readable control flow
-- Replace dense inline transforms with named intermediate steps when they clarify intent
-- Keep helpful names even if they cost a few extra lines
-
-### 4. Maintain Balance
-
-Watch for over-simplification:
-
-- Don't inline away names that carry meaning
-- Don't merge unrelated logic into one larger function
-- Don't remove abstractions that serve testability or extensibility
-- Don't optimize for line count over comprehension
-
-### 5. Scope to What Changed
-
-Default to simplifying recently modified code. Avoid unrelated drive-by refactors unless explicitly asked.
-
-## Process
-
-### Step 1: Understand Before Touching
-
-Before changing or removing anything, understand why it exists.
-
-Answer:
-
-- What is this code's responsibility?
-- What calls it? What does it call?
-- What are the edge cases and error paths?
-- Are there tests that define expected behavior?
-- Why might it have been written this way?
-
-If you can't answer these, read more context first.
-
-### Step 2: Look for Simplification Opportunities
-
-Signals:
-
-- Deep nesting
-- Long functions with mixed responsibilities
-- Nested ternaries
-- Boolean flag arguments
-- Repeated conditionals
-- Generic or misleading names
-- Duplicated logic
-- Dead code
-- Wrappers or abstractions that add no value
-
-### Step 3: Apply Changes Incrementally
-
-Make one simplification at a time.
-
-For each simplification:
-
-1. Make the change
-2. Use the proportionate final-state verification plan to check preservation
-3. Keep it only when the evidence supports preservation
-
-Separate refactoring from feature work whenever possible.
-
-### Step 4: Verify the Result
-
-After simplifying, confirm:
-
-- The code is genuinely easier to understand
-- The diff is clean and reviewable
-- Project conventions still match
-- No behavior, error handling, or side effects changed
-
-## Guidance for This Repository
-
-- Prefer straightforward TypeScript over clever compression
-- Preserve existing runtime behavior, tests, and hooks
-- Favor explicit names and smaller focused helpers when they improve readability
-- Keep refactors tightly scoped to the task or review feedback
-
-## Final-state verification
-
-Use a proportionate final-state verification plan for the final diff. Run checks
-required by repository and release instructions; add or repeat evidence only
-when the changed scope or a stated uncertainty warrants it.
+For detailed process, simplification signals, and verification guidance, read [full guide](references/full-guide.md).

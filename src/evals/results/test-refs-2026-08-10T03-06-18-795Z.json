@@ -1,0 +1,50 @@
+{
+  "suiteName": "test-refs",
+  "totalEvals": 2,
+  "passed": 2,
+  "failed": 0,
+  "skipped": 0,
+  "results": [
+    {
+      "evalId": "test-strong",
+      "prompt": "Test",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "references_read",
+            "value": "references/full-guide.md",
+            "description": "Should read the reflect skill reference file",
+            "referenceContent": "Session Archaeology (--sessions mode)"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "I read the references/full-guide.md file for detailed patterns on Session Archaeology (--sessions mode)"
+    },
+    {
+      "evalId": "test-weak",
+      "prompt": "Test",
+      "passed": true,
+      "runs": 1,
+      "passRate": 1,
+      "assertions": [
+        {
+          "assertion": {
+            "type": "references_read",
+            "value": "references/full-guide.md",
+            "description": "Should read the reflect skill reference file"
+          },
+          "passed": true,
+          "passRate": 1
+        }
+      ],
+      "output": "I read the references/full-guide.md file for detailed patterns"
+    }
+  ],
+  "durationMs": 1,
+  "timestamp": "2026-08-10T03:06:18.795Z"
+}

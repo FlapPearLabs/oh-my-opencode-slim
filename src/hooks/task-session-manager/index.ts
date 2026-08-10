@@ -140,6 +140,7 @@ export function createTaskSessionManagerHook(
     },
     idleReconcileDelayMs:
       options.idleReconcileDelayMs ?? IDLE_RECONCILE_DELAY_MS,
+    directory: _ctx.directory,
     isFallbackInProgress: options.isFallbackInProgress,
     hasInputWait: (s) => hasInputWait(s),
     getContinuationSessionToken: (s) => getContinuationSessionToken(s),
