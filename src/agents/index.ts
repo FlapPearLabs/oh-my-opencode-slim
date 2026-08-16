@@ -29,6 +29,7 @@ import {
   createOrchestratorAgent,
   resolvePrompt,
 } from './orchestrator';
+import { createSecurityReviewerAgent } from './security-reviewer';
 import { appendTaskRejectionInstruction } from './task-rejection';
 
 export type { AgentDefinition } from './orchestrator';
@@ -323,6 +324,7 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   designer: createDesignerAgent,
   fixer: createFixerAgent,
   observer: createObserverAgent,
+  'security-reviewer': createSecurityReviewerAgent,
   council: createCouncilAgent,
   councillor: createCouncillorAgent,
 };

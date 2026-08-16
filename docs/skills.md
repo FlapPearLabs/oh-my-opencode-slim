@@ -123,17 +123,18 @@ Start it directly with:
    based on dependencies and natural delivery boundaries. Do not split work
    merely to make an Oracle review smaller.
 4. Before execution, show a compact overview of phase order, specialist
-   ownership/scope, the Oracle review total, the review after each phase, and a
-   short reason for each gate.
-5. Execute phase by phase: validate, update session state, then get an Oracle
-   review before advancing.
+   ownership/scope, the Oracle gate and security-audit totals, both reviews after
+   each phase, and a short reason for each gate.
+5. Execute phase by phase: validate, update session state, then run one
+   security audit in parallel with one Oracle gate before advancing.
 6. Batch material findings into one bounded remediation pass with focused
-   validation. Re-review only when needed to assess a changed decision/risk or
-   an otherwise unverifiable concern.
+   validation. Oracle follows its existing gate budget; each security audit has
+   at most one re-review, only for a changed security boundary or an original
+   finding that cannot be verified with focused evidence.
 
 **Key features:**
 - Persistent session state in markdown files
-- Predictable Oracle reviews after each planned phase, declared before execution
+- Predictable Oracle gates and security audits after every phase, declared before execution
 - V2 scheduler integration (dispatch specialists, wait for hook-driven completion, reconcile)
 - OpenCode todo lists for progress tracking
 - Flexible structure - orchestrator adapts format to task needs

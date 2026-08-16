@@ -24,6 +24,10 @@ describe('parseList', () => {
     ).toEqual(['gh_grep', 'custom-mcp']);
   });
 
+  test('security reviewer has no default MCP access', () => {
+    expect(DEFAULT_AGENT_MCPS['security-reviewer']).toEqual([]);
+  });
+
   test('wildcard with exclusions', () => {
     expect(parseList(['*', '!mcp2'], ['mcp1', 'mcp2', 'mcp3'])).toEqual([
       'mcp1',

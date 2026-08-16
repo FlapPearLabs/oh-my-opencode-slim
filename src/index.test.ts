@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createReadOnlyAgentPermission } from './agents/permissions';
 import { OhMyOpenCodeLite as plugin } from './index';
 
 function createPluginClient(
@@ -140,6 +141,76 @@ describe('plugin tool registration', () => {
         { sessionID: 'parent-after-reload', agent: 'orchestrator' } as never,
       ),
     ).resolves.toContain('state: waiting_for_user');
+  });
+
+  test('keeps security reviewer read-only after host and MCP config merges', async () => {
+    const originalEnv = { ...process.env };
+    const configDir = await mkdtemp('/tmp/oh-my-opencode-security-config-');
+    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+
+    try {
+      await Bun.write(
+        `${configDir}/oh-my-opencode-slim.json`,
+        JSON.stringify({
+          agents: {
+            'security-reviewer': {
+              model: 'test/security-reviewer',
+              permission: 'allow',
+              mcps: ['*'],
+              displayName: 'sec-audit',
+            },
+          },
+        }),
+      );
+      process.env = { ...originalEnv, OPENCODE_CONFIG_DIR: configDir };
+      delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+
+      hooks = await plugin({
+        client: createPluginClient(async () => ({})),
+        directory: configDir,
+        worktree: configDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+      } as never);
+
+      const opencodeConfig = {
+        agent: {
+          'security-reviewer': {
+            permission: 'allow',
+            mcps: ['*'],
+          },
+          'sec-audit': {
+            permission: 'allow',
+            mcps: ['*'],
+          },
+        },
+      } as Record<string, unknown>;
+      await hooks.config?.(opencodeConfig);
+
+      const configAgents = opencodeConfig.agent as Record<
+        string,
+        Record<string, unknown>
+      >;
+      for (const agentName of ['security-reviewer', 'sec-audit']) {
+        const securityReviewer = configAgents[agentName];
+        const permission = securityReviewer.permission as Record<
+          string,
+          unknown
+        >;
+
+        expect(permission).toEqual(createReadOnlyAgentPermission());
+        expect(permission.edit).toBe('deny');
+        expect(permission.task).toBe('deny');
+        expect(permission['context7_*']).toBeUndefined();
+        expect(permission['gh_grep_*']).toBeUndefined();
+        expect(securityReviewer.mcps).toBeUndefined();
+      }
+    } finally {
+      const dispose = (hooks as unknown as { dispose?: () => Promise<void> })
+        ?.dispose;
+      await dispose?.();
+      process.env = originalEnv;
+      await rm(configDir, { recursive: true, force: true });
+    }
   });
 
   test('exposes an idempotent top-level dispose finalizer', async () => {

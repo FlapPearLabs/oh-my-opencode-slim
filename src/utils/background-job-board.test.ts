@@ -25,6 +25,18 @@ describe('BackgroundJobBoard', () => {
     expect(board.hasRunning('parent-1')).toBe(true);
   });
 
+  test('uses the security reviewer alias prefix', () => {
+    const board = new BackgroundJobBoard();
+
+    const job = board.registerLaunch({
+      taskID: 'ses_security',
+      parentSessionID: 'parent-1',
+      agent: 'security-reviewer',
+    });
+
+    expect(job.alias).toBe('sec-1');
+  });
+
   test('updates terminal task results as unreconciled', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({

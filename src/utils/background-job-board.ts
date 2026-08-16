@@ -124,6 +124,7 @@ const AGENT_PREFIX: Record<string, string> = {
   librarian: 'lib',
   observer: 'obs',
   oracle: 'ora',
+  'security-reviewer': 'sec',
 };
 
 export class BackgroundJobBoard implements BackgroundJobStore {

@@ -19,6 +19,14 @@ features.
 When deepwork is active, the orchestrator must manage the work as a scheduler,
 not as the default implementation worker.
 
+## Required Security Gate
+
+Before planning, creating deepwork state, or dispatching work, verify that the
+`@security-reviewer` agent is enabled and available. Deepwork cannot proceed
+without it. If it is unavailable, stop and ask the user to enable
+`security-reviewer` or explicitly change the workflow; do not silently
+substitute another reviewer.
+
 ## Setup and Deepwork State
 
 - create and maintain a local markdown progress file under `.slim/deepwork/`;
@@ -72,10 +80,10 @@ reference local files by path rather than copying their contents.
 - before dispatch, choose a small number of coherent implementation phases from
   the work's dependencies and natural delivery boundaries; do not split work
   merely to reduce an Oracle review's scope;
-- before execution, define coherent delivery phases and make an `@oracle` review
-  mandatory after each one; record the phase order, specialist ownership, gate
-  order, and one-line gate rationale in the deepwork file; share a compact
-  version with the user;
+- before execution, define coherent delivery phases and make one `@oracle` gate
+  and one `@security-reviewer` audit mandatory after every phase, in parallel;
+  record the phase order, specialist ownership, gate order, and one-line gate
+  rationale in the deepwork file; share a compact version with the user;
 - before starting each phase, replace the OpenCode todo list with actionable
   delivery todos for that phase only;
 
@@ -98,9 +106,12 @@ Use the scheduler model throughout:
 
 ## Phase Gate and Commit
 
-- after each planned phase, run relevant validation, update the deepwork file,
-  then request its planned `@oracle` gate before continuing;
-- before its planned Oracle gate, record relevant accepted research and file
+- after each phase, run relevant validation, update the deepwork file, then
+  dispatch the mandatory `@security-reviewer` audit in parallel with the phase's
+  single mandatory `@oracle` gate. The security audit reviews only
+  supplied changed paths and stated behavior for concrete material findings;
+  it does not add another Oracle gate or change the existing review budget;
+- before the Oracle gate, record relevant accepted research and file
   references so Oracle reviews established context rather than repeating
   discovery;
 - record the phase goal, changed paths, validation evidence, and the specific
@@ -108,18 +119,19 @@ Use the scheduler model throughout:
   Oracle with the accepted research and file references;
 - when the phase changes module boundaries, dependency direction, or file
   placement, run an `@explorer` structure scan in parallel with the Oracle gate;
-- reconcile review findings, perform one bounded remediation pass for material
-  issues, and validate that pass with focused evidence;
+- reconcile Oracle and security-reviewer findings, perform one bounded
+  remediation/revalidation pass for material issues, and validate it with
+  focused evidence;
 - create a focused commit when the phase is an independently valid delivery
   boundary before starting the next phase;
 
 ### Oracle Re-Reviews
 
 Every planned Oracle gate has one initial review and may have at most two
-re-reviews. Request a re-review only when the remediation materially changes
-the reviewed decision or risk, or when the original concern cannot be verified
-with focused evidence. Do not spend a re-review on a mechanical or
-already-verified change.
+re-reviews. Request an Oracle re-review only when the remediation materially
+changes the reviewed decision or risk, or when the original concern cannot be
+verified with focused evidence. Do not spend an Oracle re-review on a mechanical
+or already-verified change.
 
 State the attempt in every Oracle prompt, for example:
 
@@ -133,6 +145,14 @@ reopen accepted, unchanged, or resolved concerns. When the two re-reviews are
 exhausted, record any remaining material risk or blocker in the deepwork file
 and ask the user whether to accept the risk, change scope, or authorize an
 exceptional additional review.
+
+### Security Reviewer Re-Reviews
+
+Each mandatory security audit has one initial review and at most one re-review.
+Request that re-review only when remediation changes a security boundary or the
+original finding cannot be verified with focused evidence. Do not re-review for
+an unrelated architecture decision, a mechanical change, or an already-
+verified finding.
 
 ## Designer Handoff Guardrail
 

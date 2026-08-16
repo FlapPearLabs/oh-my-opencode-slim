@@ -122,7 +122,12 @@ describe('built-in subagent preset fallback', () => {
 
     const agents = createAgents(runtimeFor(config));
 
-    for (const name of ['observer', 'council', 'councillor'] as const) {
+    for (const name of [
+      'observer',
+      'security-reviewer',
+      'council',
+      'councillor',
+    ] as const) {
       expect(agents.find((a) => a.name === name)?.config.model).toBe(
         'opencode-go/glm-5.2',
       );
@@ -380,6 +385,21 @@ describe('tool permissions', () => {
     ).toBe('deny');
   });
 
+  test('security reviewer keeps strict read-only advisory permissions', () => {
+    const agents = createAgents(runtimeFor());
+    const reviewer = agents.find((a) => a.name === 'security-reviewer');
+    const permission = reviewer?.config.permission as Record<string, string>;
+
+    expect(permission['*']).toBe('deny');
+    expect(permission.read).toBe('allow');
+    expect(permission.glob).toBe('allow');
+    expect(permission.grep).toBe('allow');
+    expect(permission.edit).toBe('deny');
+    expect(permission.write).toBe('deny');
+    expect(permission.bash).toBe('deny');
+    expect(permission.task).toBe('deny');
+  });
+
   test('subagents are denied access to wait_for_user', () => {
     const agents = createAgents(runtimeFor());
 
@@ -454,6 +474,18 @@ test('orchestrator prompt excludes Council Mode when no councillors', () => {
   expect(prompt).not.toContain('## Council Mode');
 });
 
+test('orchestrator prompt routes focused security audits to security reviewer', () => {
+  const agents = createAgents(runtimeFor());
+  const orchestrator = agents.find((a) => a.name === 'orchestrator');
+  const prompt = orchestrator?.config.prompt as string;
+
+  expect(prompt).toContain('@security-reviewer');
+  expect(prompt).toContain('Focused, strictly read-only security audit');
+  expect(prompt).not.toContain(
+    'Delegate to @security-reviewer for general architecture',
+  );
+});
+
 describe('isSubagent type guard', () => {
   test('returns true for valid subagent names', () => {
     expect(isSubagent('explorer')).toBe(true);
@@ -461,6 +493,7 @@ describe('isSubagent type guard', () => {
     expect(isSubagent('oracle')).toBe(true);
     expect(isSubagent('designer')).toBe(true);
     expect(isSubagent('fixer')).toBe(true);
+    expect(isSubagent('security-reviewer')).toBe(true);
   });
 
   test('returns false for orchestrator', () => {
@@ -568,11 +601,25 @@ describe('createAgents', () => {
     expect(names).toContain('oracle');
     expect(names).toContain('librarian');
     expect(names).toContain('fixer');
+    expect(names).toContain('security-reviewer');
   });
 
-  test('creates exactly 7 agents by default (observer disabled, council unconfigured)', () => {
+  test('security reviewer prompt stays narrow and evidence-driven', () => {
+    const reviewer = createAgents(runtimeFor()).find(
+      (agent) => agent.name === 'security-reviewer',
+    );
+    const prompt = reviewer?.config.prompt as string;
+
+    expect(prompt).toContain('supplied changed paths and stated behavior');
+    expect(prompt).toContain('at most three material findings');
+    expect(prompt).toContain('No material findings');
+    expect(prompt).toContain('Do not report generic authentication');
+    expect(prompt).toContain('Do not use task or other delegation tools');
+  });
+
+  test('creates exactly 8 agents by default (observer disabled, council unconfigured)', () => {
     const agents = createAgents(runtimeFor());
-    expect(agents.length).toBe(7);
+    expect(agents.length).toBe(8);
   });
 
   test('does not create council when council is not configured', () => {
@@ -1089,13 +1136,13 @@ describe('disabled_agents', () => {
 
   test('agent count decreases when agents are disabled', () => {
     const agents = createAgents(runtimeFor());
-    expect(agents.length).toBe(7); // observer disabled, council unconfigured
+    expect(agents.length).toBe(8); // observer disabled, council unconfigured
 
     const disabledConfig: PluginConfig = {
       disabled_agents: ['observer', 'designer'],
     };
     const disabledAgents = createAgents(runtimeFor(disabledConfig));
-    expect(disabledAgents.length).toBe(6);
+    expect(disabledAgents.length).toBe(7);
   });
 
   test('getDisabledAgents respects protection rules', () => {
@@ -1114,7 +1161,7 @@ describe('disabled_agents', () => {
     };
     const agents = createAgents(runtimeFor(config));
     const names = agents.map((a) => a.name);
-    expect(agents.length).toBe(8);
+    expect(agents.length).toBe(9);
     expect(names).toContain('observer');
     expect(names).not.toContain('council');
   });

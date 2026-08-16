@@ -65,6 +65,14 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Don't delegate when:** Routine decisions you're confident about • First bug fix attempt • Straightforward trade-offs • Tactical "how" vs strategic "should" • Time-sensitive good-enough decisions • Quick research/testing can answer
 - **Rule of thumb:** Need senior architect review? → @oracle. Need code review or simplification? → @oracle. Routine coordination or final synthesis? → handle directly.`,
 
+  'security-reviewer': `@security-reviewer
+- Lane: Focused, strictly read-only security audit
+- Role: Evidence-driven review of supplied changed paths and stated behavior
+- Permissions: read_files
+- **Delegate when:** A focused change needs an independent audit for concrete secret disclosure, unintended external actions, data loss/corruption, invalid durable-state transitions, unsafe untrusted-data handling, or incorrect permission/trust-boundary behavior
+- **Don't delegate when:** Implementing a fix • General architecture or code-quality review • Generic auth, authorization, firewall, rate-limit, accessibility, or checklist advice • No changed paths or stated behavior are supplied
+- **Review contract:** Report at most three material findings, each with severity, exact file reference, failure/exploit precondition, impact, and narrowly scoped remediation. Report no material findings when applicable. Never implement or propose broad refactors.`,
+
   designer: `@designer
 - Lane: UI/UX design, related edits, design polish and review
 - Permissions: read_files, write_files
@@ -232,10 +240,14 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 - Use \`cancel_task\` only when the user asks, or when a running lane is obsolete, wrong, or conflicts with a safer replacement plan.
 - Cancellation is not rollback: if cancelling a writer, inspect and reconcile partial file changes before launching a replacement lane.
 
-${wakeSchedulerEnabled ? `#### End Turn After Background Tasks
+${
+  wakeSchedulerEnabled
+    ? `#### End Turn After Background Tasks
 After spawning all independent background tasks and any remaining non-overlapping work, end the turn immediately with a brief status message. Do not call \`wait_for_user\` to await background task completion — the system notifies you automatically via the Background Job Board when tasks finish, and the orchestrator wake scheduler resumes you. Do not poll for status with repeated tool calls. The correct flow is: launch tasks → brief status → end turn → completion hook or wake scheduler resumes → reconcile results.
 
-` : ''}### Active Task Amendments
+`
+    : ''
+}### Active Task Amendments
 - A task in the Active / Unreconciled section is still running and cannot receive another \`task\` call, even with its \`task_id\`. Do not try to resume, replace, or cancel it merely because the user adds to its existing scope.
 - For an additive request to a running lane, record the amendment in the parent conversation, tell the user it is queued, and wait for that lane's terminal result. Then resume the same specialist only after its session appears in Reusable Sessions.
 - Cancel a running task only when its current objective is genuinely obsolete or must be replaced. Never create-and-cancel speculative duplicate sessions.

@@ -1,6 +1,7 @@
 import type { Plugin, ToolDefinition } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, isSubagent } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
+import { createReadOnlyAgentPermission } from './agents/permissions';
 import { CompanionManager } from './companion/manager';
 import { ensureCompanionVersion } from './companion/updater';
 import { deepMerge, loadPluginConfig, type MultiplexerConfig } from './config';
@@ -65,6 +66,7 @@ import {
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
+import { normalizeAgentName } from './utils/agent-variant';
 import { isPluginDisabledByEnv } from './utils/env';
 import { initLogger, log } from './utils/logger';
 import { SessionMetadataStore } from './utils/session-metadata';
@@ -137,6 +139,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let runtime: RuntimeConfig;
   let agentDefs: ReturnType<typeof createAgents>;
   let agents: ReturnType<typeof getAgentConfigs>;
+  const securityReviewerConfigKeys = new Set<string>();
   let mcps: ReturnType<typeof createBuiltinMcps>;
   let multiplexerConfig: MultiplexerConfig;
   let multiplexerEnabled: boolean;
@@ -219,6 +222,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(runtime);
     agentDefs = createAgents(runtime, { projectDirectory: ctx.directory });
     agents = getAgentConfigs(runtime, { projectDirectory: ctx.directory });
+    for (const agentDef of agentDefs) {
+      if (agentDef.name !== 'security-reviewer') continue;
+      securityReviewerConfigKeys.add(agentDef.name);
+      if (agentDef.displayName) {
+        securityReviewerConfigKeys.add(
+          normalizeAgentName(agentDef.displayName),
+        );
+      }
+    }
 
     // Parse multiplexer config with defaults
     multiplexerConfig = runtime.multiplexer;
@@ -854,10 +866,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           string,
           unknown
         >;
-        const agentPermission = (agentConfigEntry.permission ?? {}) as Record<
-          string,
-          unknown
-        >;
+        const agentPermission = securityReviewerConfigKeys.has(agentName)
+          ? {}
+          : ((agentConfigEntry.permission ?? {}) as Record<string, unknown>);
 
         // Parse mcps list with wildcard and exclusion support
         const allowedMcps = parseList(agentMcps, allMcpNames);
@@ -877,6 +888,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
         // Update agent config with permissions
         agentConfigEntry.permission = agentPermission;
+      }
+
+      for (const agentName of securityReviewerConfigKeys) {
+        const securityReviewerConfig = configAgent[agentName];
+        if (
+          securityReviewerConfig &&
+          typeof securityReviewerConfig === 'object' &&
+          !Array.isArray(securityReviewerConfig)
+        ) {
+          const finalSecurityReviewerConfig = securityReviewerConfig as Record<
+            string,
+            unknown
+          >;
+          finalSecurityReviewerConfig.permission =
+            createReadOnlyAgentPermission();
+          delete finalSecurityReviewerConfig.mcps;
+        }
       }
 
       interviewManager.registerCommand(opencodeConfig);

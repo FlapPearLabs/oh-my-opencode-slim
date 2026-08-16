@@ -68,6 +68,7 @@ Built-in agent prompt file names are exact agent names:
 - `designer.md` / `designer_append.md`
 - `fixer.md` / `fixer_append.md`
 - `observer.md` / `observer_append.md`
+- `security-reviewer.md` / `security-reviewer_append.md`
 - `council.md` / `council_append.md`
 
 Prefer `{agent}_append.md` for small behavior tuning. Use `{agent}.md` only when
@@ -103,7 +104,7 @@ Common customizations:
 Important schema boundary:
 
 - Built-in agents (`orchestrator`, `oracle`, `librarian`, `explorer`,
-  `designer`, `fixer`, `observer`, `council`) can set models, variants, skills,
+  `designer`, `fixer`, `observer`, `security-reviewer`, `council`) can set models, variants, skills,
   MCPs, options, and display names in config.
 - Built-in agent `prompt` and `orchestratorPrompt` fields are **not** supported
   in `oh-my-opencode-slim.json[c]`; use markdown prompt override files instead.
@@ -257,6 +258,7 @@ Avoid custom agents that duplicate existing specialists:
 - codebase scouting → `explorer`
 - external docs/research → `librarian`
 - architecture/debugging/review → `oracle`
+- focused security audit of supplied changes → `security-reviewer`
 - UI/UX polish → `designer`
 - scoped mechanical implementation → `fixer`
 

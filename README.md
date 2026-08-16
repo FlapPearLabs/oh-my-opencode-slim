@@ -4,7 +4,7 @@
   </a>
   <h3>✨ oh-my-opencode-slim ✨</h3>
 
-  <p><i>Seven divine beings emerged from the dawn of code, each an immortal master of their craft,<br>awaiting your command to forge order from chaos and build what was once thought impossible.</i></p>
+  <p><i>Eight divine beings emerged from the dawn of code, each an immortal master of their craft,<br>awaiting your command to forge order from chaos and build what was once thought impossible.</i></p>
 
   <p><b>Opencode Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
@@ -30,9 +30,10 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 
 ### ✨ Highlights
 
-- **[Seven specialized agents](#meet-the-pantheon)** - Orchestrator, Explorer,
-  Oracle, Council, Librarian, Designer, and Fixer. Each part of the job goes to
-  the agent best suited for it - mix any models across any providers.
+- **[Eight specialized agents](#meet-the-pantheon)** - Orchestrator, Explorer,
+  Oracle, Council, Librarian, Designer, Fixer, and Security Reviewer. Each part
+  of the job goes to the agent best suited for it - mix any models across any
+  providers.
 - **[Background orchestration](docs/background-orchestration.md)** - the
   Orchestrator dispatches specialists as background tasks, tracks them, and
   reconciles results before continuing - parallel work by default.

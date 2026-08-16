@@ -41,6 +41,7 @@ The built-in tool is Exa-backed (optionally Parallel), needs no API key, and is 
 | `oracle` | none |
 | `explorer` | none |
 | `fixer` | none |
+| `security-reviewer` | none |
  | `councillor` | none |
 
 ---

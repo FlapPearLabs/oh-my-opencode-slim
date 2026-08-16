@@ -11,13 +11,14 @@ export const SUBAGENT_NAMES = [
   'designer',
   'fixer',
   'observer',
+  'security-reviewer',
   'council',
   'councillor',
 ] as const;
 
 export const ALL_AGENT_NAMES = ['orchestrator', ...SUBAGENT_NAMES] as const;
 
-// Agent name type (for use in DEFAULT_MODELS)
+// Agent name type (for use in per-agent defaults)
 export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 
 /** Agents that cannot be disabled even if listed in disabled_agents config. */
@@ -36,6 +37,7 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   designer: undefined,
   fixer: undefined,
   observer: undefined,
+  'security-reviewer': undefined,
   council: undefined,
   councillor: undefined,
 };

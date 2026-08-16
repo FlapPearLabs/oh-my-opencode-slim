@@ -466,6 +466,11 @@ Notes:
 - Custom agents without a `model` are skipped with a warning
 - Disabled custom agents are not registered or injected into the orchestrator prompt
 
+The built-in `security-reviewer` is enabled by default. It is a strictly
+read-only, focused auditor for supplied changed paths and stated behavior. It
+reports only concrete material security findings and is not a replacement for
+the general-purpose `oracle` reviewer.
+
 > **Tip:** Keep `orchestratorPrompt` concise — the orchestrator reads it every turn.
 > Include: when to delegate, when NOT to delegate, and the agent's role in one paragraph.
 
@@ -501,24 +506,6 @@ The field accepts either:
         "task": "deny"
       },
       "prompt": "You are Planner. Create implementation plans only. Do not implement code."
-    }
-  }
-}
-```
-
-**Example: `security-reviewer` agent:**
-
-```jsonc
-{
-  "agents": {
-    "security-reviewer": {
-      "model": "anthropic/claude-sonnet-4-5",
-      "permission": {
-        "edit": "deny",
-        "bash": "deny",
-        "webfetch": "allow"
-      },
-      "prompt": "You are a security reviewer. Inspect code and report findings. Do not patch anything."
     }
   }
 }
