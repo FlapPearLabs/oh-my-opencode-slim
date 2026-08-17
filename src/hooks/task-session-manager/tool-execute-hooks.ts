@@ -93,6 +93,14 @@ export async function handleToolExecuteBefore(
 
   const args = output.args as TaskArgs;
   if (
+    args.task_id !== undefined &&
+    (typeof args.task_id !== 'string' || args.task_id.trim() === '')
+  ) {
+    throw new Error(
+      'Invalid task_id. Omit task_id to create a new session or use a full canonical ses_... ID to resume.',
+    );
+  }
+  if (
     typeof args.subagent_type !== 'string' ||
     args.subagent_type.trim() === ''
   ) {
@@ -126,6 +134,8 @@ export async function handleToolExecuteBefore(
   installEarlyRegistrationGenerationFence(pendingCall, deps.backgroundJobBoard);
   if (typeof args.task_id === 'string' && args.task_id.trim() !== '') {
     const requested = args.task_id.trim();
+    const canonical = SESSION_ID_PATTERN.test(requested);
+    if (canonical) args.task_id = requested;
     const remembered =
       deps.backgroundJobBoard.resolveReusable(
         input.sessionID,
@@ -137,6 +147,12 @@ export async function handleToolExecuteBefore(
         requested,
         agentType,
       );
+
+    if (remembered && !canonical) {
+      throw new Error(
+        `Task alias ${requested} is display-only and resolves to resumable session ${remembered.taskID}. Retry with the canonical task_id: ${remembered.taskID}.`,
+      );
+    }
 
     if (!remembered) {
       const knownManagedTask = deps.backgroundJobBoard.resolve(
@@ -150,11 +166,20 @@ export async function handleToolExecuteBefore(
       }
 
       if (knownManagedTask) {
-        delete args.task_id;
-      } else if (SESSION_ID_PATTERN.test(requested)) {
+        if (!canonical) {
+          throw new Error(
+            `Task alias ${requested} cannot be resumed because its session is not reusable (state: ${knownManagedTask.state}). Wait for it to reach Reusable Sessions, or omit task_id to create a new session.`,
+          );
+        }
+        throw new Error(
+          `Task ${requested} is known but cannot be resumed because its session is not reusable (state: ${knownManagedTask.state}). Wait for it to reach Reusable Sessions, or omit task_id to create a new session.`,
+        );
+      } else if (canonical) {
         pendingCall.resumedTaskId = requested;
       } else {
-        delete args.task_id;
+        throw new Error(
+          `Unknown task_id ${requested}. Omit task_id to create a new session or use a full canonical ses_... ID to resume.`,
+        );
       }
     } else {
       const relaunchLease = deps.backgroundJobBoard.acquireRelaunchLease(

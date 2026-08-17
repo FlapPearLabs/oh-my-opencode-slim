@@ -1434,7 +1434,7 @@ describe('task-session-manager hook', () => {
     for (const state of ['cancelled', 'error'] as const) {
       const board = new BackgroundJobBoard();
       const original = board.registerLaunch({
-        taskID: `child-${state}`,
+        taskID: `ses_child_${state}`,
         parentSessionID: 'parent-1',
         agent: 'oracle',
         description: `${state} review`,
@@ -1443,18 +1443,26 @@ describe('task-session-manager hook', () => {
       const { hook } = createHook({ backgroundJobBoard: board });
 
       const beforeAcknowledgement = {
-        args: { subagent_type: 'oracle', task_id: original.alias },
+        args: { subagent_type: 'oracle', task_id: original.taskID },
       };
-      await hook['tool.execute.before'](
-        { tool: 'task', sessionID: 'parent-1', callID: `${state}-before-ack` },
-        beforeAcknowledgement,
+      await expect(
+        hook['tool.execute.before'](
+          {
+            tool: 'task',
+            sessionID: 'parent-1',
+            callID: `${state}-before-ack`,
+          },
+          beforeAcknowledgement,
+        ),
+      ).rejects.toThrow(
+        'cannot be resumed because its session is not reusable',
       );
-      expect(beforeAcknowledgement.args.task_id).toBeUndefined();
+      expect(beforeAcknowledgement.args.task_id).toBe(original.taskID);
 
       board.markReconciled(original.taskID);
 
       const resume = {
-        args: { subagent_type: 'oracle', task_id: original.alias },
+        args: { subagent_type: 'oracle', task_id: original.taskID },
       };
       await hook['tool.execute.before'](
         { tool: 'task', sessionID: 'parent-1', callID: `${state}-resume` },
@@ -1534,7 +1542,7 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('reuses timed-out running aliases after live busy recovery', async () => {
+  test('reuses timed-out running sessions after live busy recovery', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -1551,7 +1559,7 @@ describe('task-session-manager hook', () => {
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       {
         output: [
-          'task_id: child-1',
+          'task_id: ses_child',
           'state: running',
           '',
           '<task_result>',
@@ -1569,7 +1577,7 @@ describe('task-session-manager hook', () => {
       event: {
         type: 'session.status',
         properties: {
-          sessionID: 'child-1',
+          sessionID: 'ses_child',
           status: { type: 'busy' },
         },
       },
@@ -1577,18 +1585,18 @@ describe('task-session-manager hook', () => {
 
     expect(
       board.resolveRecoverable('parent-1', 'exp-1', 'explorer')?.taskID,
-    ).toBe('child-1');
+    ).toBe('ses_child');
 
     const resume = {
-      args: { subagent_type: 'explorer', task_id: 'exp-1' },
+      args: { subagent_type: 'explorer', task_id: 'ses_child' },
     };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
       resume,
     );
 
-    expect(resume.args.task_id).toBe('child-1');
-    expect(board.get('child-1')).toMatchObject({
+    expect(resume.args.task_id).toBe('ses_child');
+    expect(board.get('ses_child')).toMatchObject({
       state: 'running',
       timedOut: false,
       recoverableAfterLiveBusy: true,
@@ -1598,13 +1606,13 @@ describe('task-session-manager hook', () => {
   test('holds a relaunch lease through after and releases it after registration', async () => {
     const board = new BackgroundJobBoard();
     setupCompletedJob(board, {
-      taskID: 'child-1',
+      taskID: 'ses_child',
       parentSessionID: 'parent-1',
     });
-    board.markReconciled('child-1');
+    board.markReconciled('ses_child');
     const { hook } = createHook({ backgroundJobBoard: board });
     const resume = {
-      args: { subagent_type: 'oracle', task_id: 'ora-1' },
+      args: { subagent_type: 'oracle', task_id: 'ses_child' },
     };
 
     await hook['tool.execute.before'](
@@ -1613,14 +1621,14 @@ describe('task-session-manager hook', () => {
     );
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
-      { output: ['task_id: child-1', 'state: running'].join('\n') },
+      { output: ['task_id: ses_child', 'state: running'].join('\n') },
     );
 
-    const relaunched = board.get('child-1');
-    expect(resume.args.task_id).toBe('child-1');
+    const relaunched = board.get('ses_child');
+    expect(resume.args.task_id).toBe('ses_child');
     expect(relaunched).toMatchObject({ generation: 2, state: 'running' });
     const cancellationLease = board.acquireCancellationLease(
-      'child-1',
+      'ses_child',
       relaunched?.generation ?? -1,
     );
     expect(cancellationLease).toBeDefined();
@@ -1677,7 +1685,7 @@ describe('task-session-manager hook', () => {
   test('tool.execute.before refuses a relaunch while cancellation owns the generation', async () => {
     const board = new BackgroundJobBoard();
     const first = board.registerLaunch({
-      taskID: 'child-1',
+      taskID: 'ses_child',
       parentSessionID: 'parent-1',
       agent: 'fixer',
     });
@@ -1697,7 +1705,9 @@ describe('task-session-manager hook', () => {
     );
     expect(cancellationLease).toBeDefined();
     const { hook } = createHook({ backgroundJobBoard: board });
-    const resume = { args: { subagent_type: 'fixer', task_id: 'fix-1' } };
+    const resume = {
+      args: { subagent_type: 'fixer', task_id: 'ses_child' },
+    };
 
     await expect(
       hook['tool.execute.before'](
@@ -1705,7 +1715,7 @@ describe('task-session-manager hook', () => {
         resume,
       ),
     ).rejects.toThrow('cannot be resumed safely');
-    expect(resume.args.task_id).toBe('fix-1');
+    expect(resume.args.task_id).toBe('ses_child');
     expect(board.get(first.taskID)?.generation).toBe(first.generation);
     if (!cancellationLease) {
       throw new Error('cancellation lease was not acquired');
@@ -1716,21 +1726,22 @@ describe('task-session-manager hook', () => {
   test('after output errors still release a pending relaunch lease', async () => {
     const board = new BackgroundJobBoard();
     setupCompletedJob(board, {
-      taskID: 'child-1',
+      taskID: 'ses_child',
       parentSessionID: 'parent-1',
     });
+    board.markReconciled('ses_child');
     const { hook } = createHook({ backgroundJobBoard: board });
 
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-error' },
-      { args: { subagent_type: 'oracle', task_id: 'ora-1' } },
+      { args: { subagent_type: 'oracle', task_id: 'ses_child' } },
     );
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-error' },
       { output: undefined },
     );
 
-    const secondLease = board.acquireRelaunchLease('child-1', 1);
+    const secondLease = board.acquireRelaunchLease('ses_child', 1);
     expect(secondLease).toBeDefined();
     if (!secondLease) throw new Error('relaunch lease was not released');
     board.releaseLease(secondLease);
@@ -1739,10 +1750,10 @@ describe('task-session-manager hook', () => {
   test('after handler exceptions release a pending relaunch lease', async () => {
     const board = new BackgroundJobBoard();
     setupCompletedJob(board, {
-      taskID: 'child-1',
+      taskID: 'ses_child',
       parentSessionID: 'parent-1',
     });
-    board.markReconciled('child-1');
+    board.markReconciled('ses_child');
     board.addContext = () => {
       throw new Error('context tracking failed');
     };
@@ -1750,16 +1761,16 @@ describe('task-session-manager hook', () => {
 
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-throw' },
-      { args: { subagent_type: 'oracle', task_id: 'ora-1' } },
+      { args: { subagent_type: 'oracle', task_id: 'ses_child' } },
     );
     await expect(
       hook['tool.execute.after'](
         { tool: 'task', sessionID: 'parent-1', callID: 'resume-throw' },
-        { output: ['task_id: child-1', 'state: running'].join('\n') },
+        { output: ['task_id: ses_child', 'state: running'].join('\n') },
       ),
     ).rejects.toThrow('context tracking failed');
 
-    const cancellationLease = board.acquireCancellationLease('child-1', 2);
+    const cancellationLease = board.acquireCancellationLease('ses_child', 2);
     expect(cancellationLease).toBeDefined();
     if (!cancellationLease) {
       throw new Error('cancellation lease was not acquired');
@@ -4170,13 +4181,13 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({ backgroundJobBoard: board });
 
     board.registerLaunch({
-      taskID: 'child-1',
+      taskID: 'ses_child',
       parentSessionID: 'parent-1',
       agent: 'explorer',
       description: 'map config schema',
     });
     board.updateStatus({
-      taskID: 'child-1',
+      taskID: 'ses_child',
       state: 'completed',
       resultSummary: 'schema mapped',
     });
@@ -4197,7 +4208,7 @@ describe('task-session-manager hook', () => {
     await transformMessages(hook, nextMessages);
     expect(boardText(nextMessages)).toContain('#### Reusable Sessions');
     expect(boardText(nextMessages)).toContain(
-      'exp-1 / child-1 / explorer / completed, reconciled',
+      'exp-1 / ses_child / explorer / completed, reconciled',
     );
     expect(nextMessages.messages[0].parts[0].text).not.toContain(
       ['<resumable', '_sessions>'].join(''),
@@ -4210,14 +4221,14 @@ describe('task-session-manager hook', () => {
       args: {
         subagent_type: 'explorer',
         description: 'continue config schema',
-        task_id: 'exp-1',
+        task_id: 'ses_child',
       },
     };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
       resume,
     );
-    expect(resume.args.task_id).toBe('child-1');
+    expect(resume.args.task_id).toBe('ses_child');
   });
 
   test('only acknowledged terminal jobs resolve as reusable task sessions', async () => {
@@ -4225,56 +4236,60 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({ backgroundJobBoard: board });
 
     board.registerLaunch({
-      taskID: 'done-1',
+      taskID: 'ses_done',
       parentSessionID: 'parent-1',
       agent: 'oracle',
       description: 'review plan',
     });
-    board.updateStatus({ taskID: 'done-1', state: 'completed' });
+    board.updateStatus({ taskID: 'ses_done', state: 'completed' });
     board.registerLaunch({
-      taskID: 'err-1',
+      taskID: 'ses_err',
       parentSessionID: 'parent-1',
       agent: 'oracle',
       description: 'bad review',
     });
-    board.updateStatus({ taskID: 'err-1', state: 'error' });
-    board.markReconciled('err-1');
+    board.updateStatus({ taskID: 'ses_err', state: 'error' });
+    board.markReconciled('ses_err');
 
     const unreconciled = {
-      args: { subagent_type: 'oracle', task_id: 'ora-1' },
+      args: { subagent_type: 'oracle', task_id: 'ses_done' },
     };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
-      unreconciled,
-    );
-    expect(unreconciled.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+        unreconciled,
+      ),
+    ).rejects.toThrow('cannot be resumed because its session is not reusable');
+    expect(unreconciled.args.task_id).toBe('ses_done');
 
-    board.markReconciled('done-1');
+    board.markReconciled('ses_done');
 
-    const failed = { args: { subagent_type: 'oracle', task_id: 'ora-2' } };
+    const failed = { args: { subagent_type: 'oracle', task_id: 'ses_err' } };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
       failed,
     );
-    expect(failed.args.task_id).toBe('err-1');
+    expect(failed.args.task_id).toBe('ses_err');
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
-      { output: ['task_id: err-1', 'state: running'].join('\n') },
+      { output: ['task_id: ses_err', 'state: running'].join('\n') },
     );
 
-    const completed = { args: { subagent_type: 'oracle', task_id: 'ora-1' } };
+    const completed = {
+      args: { subagent_type: 'oracle', task_id: 'ses_done' },
+    };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-3' },
       completed,
     );
-    expect(completed.args.task_id).toBe('done-1');
+    expect(completed.args.task_id).toBe('ses_done');
 
     const messages = createMessages('parent-1', 'continue');
     await transformMessages(hook, messages);
     expect(boardText(messages)).toContain(
-      'ora-1 / done-1 / oracle / completed, reconciled',
+      'ora-1 / ses_done / oracle / completed, reconciled',
     );
-    expect(messages.messages[0].parts[0].text).not.toContain('err-1');
+    expect(messages.messages[0].parts[0].text).not.toContain('ses_err');
   });
 
   test('running aliases fail closed instead of spawning a new task', async () => {
@@ -4351,27 +4366,27 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('ses_custom123');
   });
 
-  test('custom subagent aliases resolve for the same custom agent', async () => {
+  test('custom subagent canonical sessions resolve for the same custom agent', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
     board.registerLaunch({
-      taskID: 'child-1',
+      taskID: 'ses_custom',
       parentSessionID: 'parent-1',
       agent: 'repro-helper',
       description: 'ask secret letter',
     });
-    board.updateStatus({ taskID: 'child-1', state: 'completed' });
-    board.markReconciled('child-1');
+    board.updateStatus({ taskID: 'ses_custom', state: 'completed' });
+    board.markReconciled('ses_custom');
 
     const resume = {
-      args: { subagent_type: 'repro-helper', task_id: 'rep-1' },
+      args: { subagent_type: 'repro-helper', task_id: 'ses_custom' },
     };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
       resume,
     );
 
-    expect(resume.args.task_id).toBe('child-1');
+    expect(resume.args.task_id).toBe('ses_custom');
   });
 
   test('wrong parent or wrong agent alias does not resolve', async () => {
@@ -4387,39 +4402,43 @@ describe('task-session-manager hook', () => {
     board.markReconciled('child-1');
 
     const wrongAgent = { args: { subagent_type: 'oracle', task_id: 'exp-1' } };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'agent' },
-      wrongAgent,
-    );
-    expect(wrongAgent.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'agent' },
+        wrongAgent,
+      ),
+    ).rejects.toThrow('cannot be resumed because its session is not reusable');
+    expect(wrongAgent.args.task_id).toBe('exp-1');
   });
 
   test('resuming reusable job relaunches running and removes reusable entry', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
     board.registerLaunch({
-      taskID: 'child-1',
+      taskID: 'ses_child',
       parentSessionID: 'parent-1',
       agent: 'explorer',
       description: 'map hooks',
     });
-    board.updateStatus({ taskID: 'child-1', state: 'completed' });
-    board.markReconciled('child-1');
+    board.updateStatus({ taskID: 'ses_child', state: 'completed' });
+    board.markReconciled('ses_child');
 
-    const resume = { args: { subagent_type: 'explorer', task_id: 'exp-1' } };
+    const resume = {
+      args: { subagent_type: 'explorer', task_id: 'ses_child' },
+    };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
       resume,
     );
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
-      { output: ['task_id: child-1', 'state: running'].join('\n') },
+      { output: ['task_id: ses_child', 'state: running'].join('\n') },
     );
 
     const messages = createMessages('parent-1', 'continue');
     await transformMessages(hook, messages);
     expect(boardText(messages)).toContain(
-      'exp-1 / child-1 / explorer / running',
+      'exp-1 / ses_child / explorer / running',
     );
     expect(boardText(messages)).toContain('#### Reusable Sessions\n- none');
   });
@@ -4481,7 +4500,9 @@ describe('task-session-manager hook', () => {
       'fix-1 / ses_child / fixer / completed, reconciled',
     );
 
-    const resume = { args: { subagent_type: 'fixer', task_id: 'fix-1' } };
+    const resume = {
+      args: { subagent_type: 'fixer', task_id: 'ses_child' },
+    };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
       resume,
@@ -4537,16 +4558,17 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('ses_existing');
   });
 
-  test('still drops unknown reusable aliases', async () => {
+  test('rejects unknown reusable aliases', async () => {
     const { hook } = createHook();
     const resume = { args: { subagent_type: 'fixer', task_id: 'fix-99' } };
 
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
-      resume,
-    );
-
-    expect(resume.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+        resume,
+      ),
+    ).rejects.toThrow('Unknown task_id fix-99');
+    expect(resume.args.task_id).toBe('fix-99');
   });
 
   test('reads before and after launch attach with unique-line counts and caps', async () => {
