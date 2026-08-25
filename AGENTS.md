@@ -180,7 +180,7 @@ Read-only dependency source repositories are available under
 `.slim/clonedeps/repos/` for inspection. Do not edit these clones.
 
 - `.slim/clonedeps/repos/anomalyco__opencode-v1.18.13/` - `https://github.com/anomalyco/opencode.git` at `v1.18.13@a105350812f05f914c768e468559dbd6bd508d8e`; inspect `packages/plugin` and `packages/sdk/js` for OpenCode plugin and SDK internals.
-- `.slim/clonedeps/repos/opencode/` - `https://github.com/anomalyco/opencode.git` at `dev@f0afb6750e63ee0a60b052914531bde0afb9bc2b`; inspect `packages/opencode` for latest TypeScript runtime internals and experimental background subagent support.
+- `.slim/clonedeps/repos/opencode/` - `https://github.com/anomalyco/opencode.git` at `beta@d6deb62379c54dc60468b80c498bd6a5899797cf`; inspect `packages/plugin`, `packages/sdk`, `packages/core`, and `packages/cli` for the OpenCode v2 migration.
 - `.slim/clonedeps/repos/modelcontextprotocol__typescript-sdk/` - `https://github.com/modelcontextprotocol/typescript-sdk.git` at `1.30.0@2d889f2b329e46680ec9bdd565de4616c497825a`; inspect it for MCP protocol and server integration internals.
 - `.slim/clonedeps/repos/agentclientprotocol__agent-client-protocol/` - `https://github.com/agentclientprotocol/agent-client-protocol.git` at `main@541daf8fa488c6b93aad4a874ac050b3daf9b282`; inspect it for ACP protocol specification and schema details.
 
