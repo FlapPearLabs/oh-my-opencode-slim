@@ -654,11 +654,8 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     const session = getClient(this.input).session;
     try {
-      // After the chain has been exhausted twice (reset retry failed and we
-      // aborted), do not intervene again for this session: re-entering would
-      // keep aborting in a loop. Surface errors to the user instead.
-      if (this.chainExhaustion.get(sessionID) === 2) return;
-      let currentModel = this.sessionModel.get(sessionID);
+      const observedModel = this.sessionModel.get(sessionID);
+      let currentModel = observedModel;
       const agentName = this.sessionAgent.get(sessionID);
       const chain = this.resolveChain(agentName, currentModel);
       // Callers pre-check via hasFallbackChain; keep as defensive guard only.
@@ -678,6 +675,44 @@ export class ForegroundFallbackManager {
       }
       // biome-ignore lint/style/noNonNullAssertion: We just set this above
       let tried = this.sessionTried.get(sessionID)!;
+
+      // A new user turn always re-sends the agent's configured primary:
+      // promptAsync's `model` is a per-message override, so a fallback never
+      // persists past the message it was applied to. Landing here on chain[0]
+      // with a tried set that already walked past it therefore means the
+      // previous descent has ended and its state is stale. Without this the
+      // next descent resumes one link deeper every turn (link 2, then 3, then
+      // 4...) until the chain is spent and the session aborts, instead of
+      // re-walking from link 2 each turn.
+      //
+      // This does not weaken the backward-fallback guard below: currentModel
+      // is re-added immediately after, so chain[0] still can never be picked.
+      // Only an OBSERVED chain[0] counts. execFallback infers
+      // `currentModel = chain[0]` above when no model was ever captured for
+      // this session, which is the opposite situation — resetting there would
+      // re-pick chain[1] on every error instead of descending.
+      // size > 1 means a previous descent actually selected a fallback
+      // (tried.add(nextModel) below), so there is stale state to clear. A
+      // single-entry chain never gets there and must stay terminal after its
+      // one abort rather than re-aborting on every error.
+      if (
+        observedModel !== undefined &&
+        observedModel === chain[0] &&
+        tried.size > 1
+      ) {
+        tried = new Set();
+        this.sessionTried.set(sessionID, tried);
+        // A descent that ended in a stage-2 abort is never followed by a
+        // successful assistant message, so the message.updated recovery path
+        // cannot clear chainExhaustion and fallback would stay disabled for
+        // the rest of the session. A fresh descent earns a fresh chance.
+        this.chainExhaustion.delete(sessionID);
+      }
+
+      // After the chain has been exhausted twice (reset retry failed and we
+      // aborted), do not intervene again for this session: re-entering would
+      // keep aborting in a loop. Surface errors to the user instead.
+      if (this.chainExhaustion.get(sessionID) === 2) return;
       if (currentModel) tried.add(currentModel);
       // ponytail: seed chain entries at or before the current model's index
       // to prevent backward fallback onto models the session already left.
