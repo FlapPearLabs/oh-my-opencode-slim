@@ -973,9 +973,6 @@ export class ForegroundFallbackManager {
         try {
           await session.promptAsync(promptBody);
         } catch {
-          if (this.hasFallbackChain(sessionID)) {
-            await this.execFallback(sessionID, error);
-          }
         }
       }
     } catch (err) {
