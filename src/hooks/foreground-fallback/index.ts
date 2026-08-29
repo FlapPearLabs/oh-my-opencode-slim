@@ -18,6 +18,7 @@
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
+import type { BackgroundJobStore } from '../../utils/background-job-store';
 import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { log } from '../../utils/logger';
 import { getClient } from '../../utils/opencode-client';
@@ -598,6 +599,7 @@ export class ForegroundFallbackManager {
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
+    private readonly backgroundJobBoard?: BackgroundJobStore,
   ) {
     if (coordinator) {
       coordinator.onSessionDeleted((id) => {
@@ -870,6 +872,7 @@ export class ForegroundFallbackManager {
 
     this.inProgress.add(sessionID);
     try {
+      if (this.hasRunningSiblings(sessionID)) return;
       await abortSessionWithTimeout(getClient(this.input), sessionID);
       await this.execFallback(sessionID, error);
     } finally {
@@ -893,6 +896,11 @@ export class ForegroundFallbackManager {
       this.lastTriggerModel.set(sessionID, curModel);
     }
     return false;
+  }
+
+  /** True if the session has running background siblings — aborting would cascade-kill them. */
+  private hasRunningSiblings(sessionID: string): boolean {
+    return this.backgroundJobBoard?.hasRunning(sessionID) === true;
   }
 
   private async retrySameModel(
@@ -946,6 +954,7 @@ export class ForegroundFallbackManager {
       // If the counter was cleared during backoff, the session recovered
       // (successful assistant response handler deletes it). Don't abort.
       if (!this.sessionSameModelRetries.has(sessionID)) return;
+      if (this.hasRunningSiblings(sessionID)) return;
       await abortSessionWithTimeout(getClient(this.input), sessionID);
 
       const replayParts = partsFromReplayMessage(lastUser) as Array<{
@@ -969,6 +978,7 @@ export class ForegroundFallbackManager {
       try {
         await session.promptAsync(promptBody);
       } catch {
+        if (this.hasRunningSiblings(sessionID)) return;
         await abortSessionWithTimeout(getClient(this.input), sessionID);
         const { promise, resolve } = Promise.withResolvers<void>();
         setTimeout(resolve, 500);
