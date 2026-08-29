@@ -325,6 +325,11 @@ const PROVIDER_OUTAGE_PATTERNS = [
   /(?:^|\s)Gone(?:$|\s)/i,
   /\bHTTP 410\b/i,
   /\bstatus.?410\b/i,
+  // Transient server/streaming faults — these also pass isFailoverError's
+  // event gate so classifyError can route them to retry_same_model.
+  /\bupstream error\b/i,
+  /\bstreaming response failed\b/i,
+  /\brequest queue is full\b/i,
 ];
 
 function extractStatusCode(error: {
@@ -348,7 +353,9 @@ export function isFailoverError(error: unknown): boolean {
     return (
       RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(error)) ||
       PROVIDER_OUTAGE_PATTERNS.some((pattern) => pattern.test(error)) ||
-      TRANSPORT_MESSAGE_PATTERNS.some((pattern) => pattern.test(error))
+      TRANSPORT_MESSAGE_PATTERNS.some((pattern) => pattern.test(error)) ||
+      HTTP2_STREAM_RESET_PATTERN.test(error) ||
+      PREMATURE_STREAM_CLOSE_PATTERN.test(error)
     );
   }
   if (typeof error !== 'object') return false;
@@ -402,7 +409,9 @@ export function isFailoverError(error: unknown): boolean {
   ].join(' ');
   const hasFailoverReason =
     RETRYABLE_ERROR_PATTERNS.some((p) => p.test(text)) ||
-    PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(text));
+    PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(text)) ||
+    HTTP2_STREAM_RESET_PATTERN.test(text) ||
+    PREMATURE_STREAM_CLOSE_PATTERN.test(text);
   // Providers sometimes return recoverable rate-limit/outage payloads with
   // an HTTP 400 wrapper. Preserve application-level 400 failures, but let a
   // recognizable failover body continue through the fallback path.
@@ -509,6 +518,10 @@ export class ForegroundFallbackManager {
   /** sessionID → consecutive 429 count for the current model.
    *  Reset on model swap or session deletion. */
   private readonly sessionRetries = new Map<string, number>();
+  /** sessionID → same-model retry count (independent of fallback budget).
+   *  Used by retrySameModel for transient server/streaming errors.
+   *  Reset on model swap, successful response, or session deletion. */
+  private readonly sessionSameModelRetries = new Map<string, number>();
   /** sessionID → chain-exhaustion stage:
    *   0 = not exhausted; 1 = chain exhausted once, reset to sticky fallback
    *   (one retry chance); 2 = exhausted again, aborted — stop intervening.
@@ -588,6 +601,7 @@ export class ForegroundFallbackManager {
         this.lastTrigger.delete(id);
         this.lastTriggerModel.delete(id);
         this.sessionRetries.delete(id);
+        this.sessionSameModelRetries.delete(id);
         this.chainExhaustion.delete(id);
       });
     }
@@ -640,6 +654,7 @@ export class ForegroundFallbackManager {
         } else if (isCompletedSuccessfulAssistant) {
           // Only a completed, successful assistant response proves recovery.
           this.sessionRetries.delete(sessionID);
+          this.sessionSameModelRetries.delete(sessionID);
           this.chainExhaustion.delete(sessionID);
         }
         break;
@@ -773,6 +788,7 @@ export class ForegroundFallbackManager {
       return false;
     }
     this.sessionRetries.delete(sessionID);
+    this.sessionSameModelRetries.delete(sessionID);
     return true;
   }
 
@@ -875,13 +891,13 @@ export class ForegroundFallbackManager {
     if (this.inProgress.has(sessionID)) return;
     this.inProgress.add(sessionID);
     try {
-      const tried = this.sessionRetries.get(sessionID) ?? 0;
+      const tried = this.sessionSameModelRetries.get(sessionID) ?? 0;
       if (tried >= this.maxRetries) {
         log('[foreground-fallback] same-model retry budget exhausted', {
           sessionID,
           attempts: tried,
         });
-        this.sessionRetries.delete(sessionID);
+        this.sessionSameModelRetries.delete(sessionID);
         if (this.hasFallbackChain(sessionID)) {
           await this.execFallback(sessionID, error);
         }
@@ -894,7 +910,7 @@ export class ForegroundFallbackManager {
         attempt: tried + 1,
         delayMs: delay,
       });
-      this.sessionRetries.set(sessionID, tried + 1);
+      this.sessionSameModelRetries.set(sessionID, tried + 1);
       const { promise, resolve } = Promise.withResolvers<void>();
       setTimeout(resolve, delay);
       await promise;
@@ -1066,6 +1082,8 @@ export class ForegroundFallbackManager {
       tried.add(nextModel);
       // Reset retry count on model switch — the new model starts fresh.
       this.sessionRetries.delete(sessionID);
+
+      this.sessionSameModelRetries.delete(sessionID);
 
       const ref = parseModelReference(nextModel);
       if (!ref) {
