@@ -3,27 +3,19 @@
  * Run eval suites — one with --suite, or all. Optionally judge and synthesize.
  */
 
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { diffResults } from '../evals/display';
 import { createEvalClient } from '../evals/eval-client';
 import { runJudge } from '../evals/judge';
-import {
-  diffResults,
-  executeSuite,
-  formatResult,
-  loadAllResults,
-  loadEvalSuite,
-  loadEvalSuites,
-  loadLatestResultPath,
-  saveResults,
-  type Transcript,
-} from '../evals/runner';
-import { type EvalSuiteResult, EvalSuiteSchema } from '../evals/schema';
+import { loadAllResults, loadLatestResultPath } from '../evals/results';
+import type { EvalSuiteResult } from '../evals/schema';
+import { EvalSuiteSchema } from '../evals/schema';
+import { runSuite } from '../evals/suite-runner';
+import { loadEvalSuite, loadEvalSuites } from '../evals/suites';
 import { runPromptCli } from '../utils/session';
-import { collectSuite } from './auto-collect';
-import { restoreAfterEvals, stashChanges } from './git-lifecycle';
 
 /** Kill stale opencode on port 4096, spawn a fresh serve, health-check. */
 async function startServe(): Promise<{
@@ -253,180 +245,6 @@ if (values.collect) {
 const RUBRIC_PATH = join(import.meta.dir, '..', 'evals', 'judge-rubric.md');
 const resultsDir = join(import.meta.dir, '..', 'evals', 'results');
 
-function buildExcludeSet(): Set<string> | undefined {
-  const ids = (values.exclude ?? '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-  return ids.length > 0 ? new Set(ids) : undefined;
-}
-
-/** Run a single eval suite: collect, score, save, return exit code. */
-async function runSuite(suite: string): Promise<number> {
-  const suiteName = suite;
-  const exclude = buildExcludeSet();
-  const runs = values.smoke ? 1 : 3;
-  const concurrency = Number(process.env.EVAL_CONCURRENCY ?? 3);
-  const cwd = process.cwd();
-  const timeoutMs = 300_000;
-
-  let outputs: Record<string, string | string[]> = {};
-  let outputsFile = values['outputs-file'];
-  let stashed = false;
-
-  if (!outputsFile) {
-    const out = `/tmp/${suiteName}.json`;
-    console.log('Stashing working tree for clean eval run...');
-    stashed = stashChanges(`${suiteName}-eval-prestash`);
-
-    const suite = loadEvalSuite(suiteName);
-    if (!suite) {
-      console.error(`Suite "${suiteName}" not found`);
-      return 1;
-    }
-
-    const effectiveRuns = values.smoke ? 1 : runs;
-    const effectiveExclude = new Set(exclude);
-    if (values.smoke) {
-      for (const c of suite.evals) {
-        if (!c.smoke) effectiveExclude.add(c.id);
-      }
-    }
-
-    if (effectiveExclude.size > 0) {
-      suite.evals = suite.evals.filter((e) => !effectiveExclude.has(e.id));
-    }
-
-    try {
-      console.log(`Collecting fresh eval outputs for ${suiteName}...`);
-      const collected = await collectSuite({
-        suite,
-        client,
-        runs: effectiveRuns,
-        concurrency,
-        directory: cwd,
-        outPath: out,
-        timeoutMs,
-      });
-      outputs = collected.outputs;
-      outputsFile = out;
-      console.log(
-        `\nLoaded ${Object.keys(outputs).length} eval outputs from ${out}`,
-      );
-    } catch (err) {
-      console.log('Restoring working tree after collection failure...');
-      restoreAfterEvals(stashed);
-      throw err;
-    }
-  }
-
-  let result: EvalSuiteResult | undefined;
-
-  try {
-    let transcripts: Record<string, Transcript[]> | undefined;
-    if (outputsFile) {
-      const transcriptPath = outputsFile.replace(
-        /\.json$/,
-        '-transcripts.json',
-      );
-      try {
-        const raw = await Bun.file(transcriptPath).text();
-        transcripts = JSON.parse(raw);
-        console.log(`Loaded transcripts from ${transcriptPath}`);
-      } catch {
-        // doesn't exist
-      }
-    }
-
-    result = await executeSuite(
-      suiteName,
-      outputs,
-      transcripts,
-      exclude ?? new Set(),
-    );
-
-    try {
-      result.gitCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd })
-        .toString()
-        .trim();
-      result.gitBranch = execFileSync(
-        'git',
-        ['rev-parse', '--abbrev-ref', 'HEAD'],
-        { cwd },
-      )
-        .toString()
-        .trim();
-    } catch {
-      // git unavailable
-    }
-
-    console.log(formatResult(result));
-
-    if (transcripts) {
-      const agentUsage = new Map<
-        string,
-        { input: number; output: number; cost: number }
-      >();
-      for (const tList of Object.values(transcripts)) {
-        for (const t of tList) {
-          for (const [agent, usage] of Object.entries(t.agentTokens ?? {})) {
-            const cur = agentUsage.get(agent) ?? {
-              input: 0,
-              output: 0,
-              cost: 0,
-            };
-            cur.input += usage.input ?? 0;
-            cur.output += usage.output ?? 0;
-            cur.cost += usage.cost ?? 0;
-            agentUsage.set(agent, cur);
-          }
-        }
-      }
-      if (agentUsage.size > 0) {
-        console.log('\nToken/cost usage per agent (all runs):');
-        for (const [agent, usage] of agentUsage) {
-          console.log(
-            `  ${agent}: in=${usage.input.toLocaleString()} out=${usage.output.toLocaleString()} cost=$${usage.cost.toFixed(4)}`,
-          );
-        }
-      }
-    }
-
-    if (result.totalEvals > 0) {
-      const resultsFile = saveResults(suiteName, result);
-      console.log(`\nResults saved to ${resultsFile}`);
-    }
-  } finally {
-    if (stashed) {
-      console.log('Cleaning eval artifacts and restoring working tree...');
-      restoreAfterEvals(stashed);
-    }
-  }
-
-  if (!result) return 1;
-
-  let exitCode = result.failed > 0 ? 1 : 0;
-  const flaky = result.results.filter(
-    (r) => r.passAtK === 1 && r.passKk === 0 && r.runs >= 3,
-  );
-  if (flaky.length > 0) {
-    console.log(
-      `\n\u26a0 ${flaky.length} flaky eval(s) detected (pass@k=1 but pass^k=0):`,
-    );
-    for (const f of flaky) {
-      console.log(
-        `  - ${f.evalId}: ${f.runs} runs, ${(f.passRate * 100).toFixed(0)}% pass rate`,
-      );
-    }
-    exitCode = 2;
-  }
-
-  console.log(
-    `\u2550\u2550\u2550 [done] ${suiteName} (exit ${exitCode}) \u2550\u2550\u2550`,
-  );
-  return exitCode;
-}
-
 const failed: string[] = [];
 
 let beforeFiles = new Set<string>();
@@ -445,7 +263,13 @@ const judgeResults = new Map<string, string>();
 
 try {
   for (const suite of suites) {
-    const code = await runSuite(suite);
+    const code = await runSuite({
+      suiteName: suite,
+      client,
+      smoke: values.smoke ?? false,
+      outputsFile: values['outputs-file'],
+      excludeStr: values.exclude,
+    });
     if (code !== 0) failed.push(suite);
 
     if (values.judge) {

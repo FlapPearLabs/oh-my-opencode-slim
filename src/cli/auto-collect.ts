@@ -6,13 +6,10 @@
 // server path keeps the process alive so the replay resolves and the poll
 // sees the answer.
 
-import type { createOpencodeClient } from '@opencode-ai/sdk';
+import type { EvalSessionClient } from '../evals/eval-client';
 import { runCase } from '../evals/run-case';
-import {
-  type EvalSuite,
-  FAILED_TRIAL_MARKER,
-  type Transcript,
-} from '../evals/runner';
+import type { EvalSuite, Transcript } from '../evals/schema';
+import { FAILED_TRIAL_MARKER } from '../evals/scoring';
 import { runWithSession } from '../evals/session-manager';
 import { cleanEvalArtifacts } from './git-lifecycle';
 
@@ -22,7 +19,7 @@ export interface CollectSuiteOptions {
   /** Pre-loaded eval suite */
   suite: EvalSuite;
   /** SDK client connected to an opencode serve instance */
-  client: ReturnType<typeof createOpencodeClient>;
+  client: EvalSessionClient;
   /** Number of runs per case */
   runs: number;
   /** Max concurrent cases */

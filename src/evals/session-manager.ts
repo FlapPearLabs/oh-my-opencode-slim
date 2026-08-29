@@ -1,7 +1,7 @@
 import { withTimeout } from '../utils/with-timeout';
 import type { EvalSessionClient } from './eval-client';
 import { pollSession } from './polling-session';
-import type { Transcript } from './runner';
+import type { Transcript } from './schema';
 
 const AGENT_NAME_RE = /^@([A-Za-z][A-Za-z0-9-]*)\s*/;
 

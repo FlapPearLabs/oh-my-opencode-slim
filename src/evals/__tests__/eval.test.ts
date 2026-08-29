@@ -1,14 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  checkAssertion,
-  executeEvalCase,
-  executeSuite,
-  formatResult,
-  loadEvalSuite,
-  loadEvalSuites,
-  type Transcript,
-} from '../runner';
+import { checkAssertion } from '../assertions';
+import { formatResult } from '../display';
+import type { Transcript } from '../schema';
 import { EvalSuiteSchema } from '../schema';
+import { executeEvalCase, executeSuite } from '../scoring';
+import { loadEvalSuite, loadEvalSuites } from '../suites';
 
 describe('eval schema', () => {
   test('validates a minimal eval suite', async () => {
