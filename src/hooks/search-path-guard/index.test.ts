@@ -85,16 +85,56 @@ describe('search-path-guard hook', () => {
     await runHook(hook, 'bash', { path: missing });
   });
 
-  test('ignores absent, non-string, or sentinel path values', async () => {
+  test('ignores absent, non-string, or empty path values', async () => {
     const hook = createHook(tempRoot);
 
     await runHook(hook, 'grep', undefined);
     await runHook(hook, 'grep', {});
     await runHook(hook, 'glob', { path: 42 });
     await runHook(hook, 'glob', { path: null });
-    await runHook(hook, 'grep', { path: 'undefined' });
-    await runHook(hook, 'grep', { path: 'null' });
-    await runHook(hook, 'glob', { path: '   ' });
+    await runHook(hook, 'grep', { path: '' });
+  });
+
+  test('blocks literal undefined/null strings like the host would resolve them', async () => {
+    const hook = createHook(tempRoot);
+
+    await expect(runHook(hook, 'grep', { path: 'undefined' })).rejects.toThrow(
+      path.join(tempRoot, 'undefined'),
+    );
+    await expect(runHook(hook, 'glob', { path: 'null' })).rejects.toThrow(
+      path.join(tempRoot, 'null'),
+    );
+  });
+
+  test('preserves significant whitespace when resolving and blocking', async () => {
+    const hook = createHook(tempRoot);
+    const raw = '  padded-missing-dir  ';
+    const resolved = path.join(tempRoot, raw);
+
+    const promise = runHook(hook, 'glob', { path: raw });
+
+    await expect(promise).rejects.toThrow(/Search path does not exist/);
+    await expect(promise).rejects.toThrow(resolved);
+  });
+
+  test('allows a directory whose name contains significant whitespace', async () => {
+    await mkdir(path.join(tempRoot, 'spaced dir '));
+
+    const hook = createHook(tempRoot);
+
+    await runHook(hook, 'glob', { path: 'spaced dir ' });
+  });
+
+  test('passes through when stat fails with a non-ENOENT error', async () => {
+    const filePath = path.join(tempRoot, 'reg-file.txt');
+    await writeFile(filePath, 'content');
+
+    const hook = createHook(tempRoot);
+
+    // A file used as a path component makes stat fail with ENOTDIR; the
+    // guard must not misreport that as a missing path.
+    await runHook(hook, 'grep', { path: 'reg-file.txt/child' });
+    await runHook(hook, 'glob', { path: 'reg-file.txt/child' });
   });
 
   test('allows grep when the path points to an existing file', async () => {

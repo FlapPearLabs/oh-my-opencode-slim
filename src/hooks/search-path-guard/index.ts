@@ -16,11 +16,6 @@ interface ToolExecuteBeforeOutput {
   };
 }
 
-// Upstream's glob tool treats the literal strings 'undefined'/'null' in the
-// path argument as absent. Mirror that so the guard never blocks a call the
-// host would have run unscoped.
-const ABSENT_PATH_LITERALS = new Set(['undefined', 'null']);
-
 export function createSearchPathGuardHook(ctx: PluginInput) {
   return {
     'tool.execute.before': async (
@@ -36,42 +31,58 @@ export function createSearchPathGuardHook(ctx: PluginInput) {
         return;
       }
 
+      // Mirror the host exactly: the path is used as-is. The host never
+      // trims it and has no runtime handling for the literal strings
+      // 'undefined'/'null' (upstream resolves them as ordinary relative
+      // paths; they only appear as schema-description guidance). An empty
+      // string resolves to the instance directory itself, so there is
+      // nothing to block either.
       const raw = args.path;
-      if (typeof raw !== 'string') {
-        return;
-      }
-      const candidate = raw.trim();
-      if (candidate.length === 0 || ABSENT_PATH_LITERALS.has(candidate)) {
+      if (typeof raw !== 'string' || raw === '') {
         return;
       }
 
       // Mirror the host's resolution rule exactly: absolute paths pass
       // through, relative paths resolve against the instance directory.
       // Without a resolution base, never block (conservative fallback).
-      const resolved = path.isAbsolute(candidate)
-        ? candidate
+      const resolved = path.isAbsolute(raw)
+        ? raw
         : ctx.directory
-          ? path.join(ctx.directory, candidate)
+          ? path.join(ctx.directory, raw)
           : null;
       if (resolved === null) {
         return;
       }
 
-      let exists = true;
+      let missing = false;
       try {
         statSync(resolved);
-      } catch {
-        exists = false;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          // Genuine missing path (broken symlinks included, matching the
+          // pending upstream fix). Report it as such.
+          missing = true;
+        } else {
+          // Any other stat failure (permissions, I/O, ENOTDIR) keeps its
+          // original meaning: pass through and never misdiagnose.
+          log('search-path-guard passed on stat error', {
+            tool: input.tool,
+            path: raw,
+            resolved,
+            code,
+          });
+        }
       }
 
-      if (!exists) {
+      if (missing) {
         log('search-path-guard blocked', {
           tool: input.tool,
-          path: candidate,
+          path: raw,
           resolved,
         });
         throw new Error(
-          `Search path does not exist: ${resolved} (from "${candidate}"). ` +
+          `Search path does not exist: ${resolved} (from "${raw}"). ` +
             `The ${input.tool} search was blocked before ripgrep ran. ` +
             'Verify the target path, or list its parent directory to find ' +
             'the correct location.',
