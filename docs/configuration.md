@@ -120,7 +120,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `presets.<name>.<agent>.temperature` | number | - | Optional temperature (0–2); when omitted, OpenCode chooses its default |
 | `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"`, or `"max"` (provider-specific) |
 | `presets.<name>.<agent>.displayName` | string | - | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
-| `presets.<name>.<agent>.color` | string | built-in agent default | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
+| `presets.<name>.<agent>.color` | string | - | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
 | `presets.<name>.<agent>.skills` | string[] | - | Skills the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.mcps` | string[] | - | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.options` | object | - | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
@@ -129,7 +129,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `agents.<customAgent>.orchestratorPrompt` | string | - | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
 | `agents.<agent>.permission` | object \| string | - | Tool-level permission rules enforced by the SDK. See [Agent Permissions](#agent-permissions) |
 | `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
-| `agents.<agent>.color` | string | built-in agent default | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
+| `agents.<agent>.color` | string | - | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
 | `agents.<agent>.description` | string | generated | Description shown to OpenCode and the orchestrator; defaults to `Custom subagent '<name>'` for custom agents |
 | `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command See [ACP-connected agents](#acp-connected-agents). |
@@ -410,21 +410,10 @@ The setting works in both root `agents` overrides and preset agent overrides.
 
 ### Agent Colors
 
-Built-in agents use theme-aware colors by default:
-
-| Agent | Default color |
-|-------|---------------|
-| `orchestrator` | `primary` |
-| `explorer` | `info` |
-| `librarian` | `secondary` |
-| `oracle` | `accent` |
-| `designer` | `success` |
-| `fixer` | `warning` |
-| `observer` | `info` |
-| `council` and councillors | `accent` |
-
-Override a built-in color or color a custom agent with a six-digit hex value
-or an OpenCode theme color:
+Built-in agents ship without a default `color`, so the OpenCode TUI assigns
+each one a distinct color from its own theme-aware palette. Set `color`
+explicitly if you want a fixed color for a built-in or custom agent, using a
+six-digit hex value or an OpenCode theme color:
 
 ```jsonc
 {
@@ -440,8 +429,7 @@ or an OpenCode theme color:
 
 Theme colors adapt to the active OpenCode theme. Dynamic councillors inherit
 the configured `council` color unless `agents.councillor.color` overrides it.
-Custom agents have no default color. `color` works in top-level `agents`
-overrides and inside `presets`.
+`color` works in top-level `agents` overrides and inside `presets`.
 
 ### Per-preset agent configuration
 

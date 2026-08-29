@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
 import {
   AgentOverrideConfigSchema,
+  ALL_AGENT_NAMES,
   CouncilConfigSchema,
-  DEFAULT_AGENT_COLORS,
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   PluginConfigSchema,
@@ -905,20 +905,20 @@ describe('getAgentConfigs', () => {
     expect(configs.fixer.temperature).toBe(0);
   });
 
-  test('applies default colors to every built-in agent', () => {
+  test('built-in agents get no default color', () => {
+    // No default pinning: colorless agents keep the distinct palette colors
+    // the OpenCode TUI assigns by round-robin (see issue #1116).
     const configs = getAgentConfigs(
       runtimeFor({ disabled_agents: [], council: councilConfig() }),
     );
 
-    for (const [name, color] of Object.entries(DEFAULT_AGENT_COLORS)) {
-      expect(configs[name]?.color).toBe(color);
+    for (const name of ALL_AGENT_NAMES) {
+      expect(configs[name]?.color).toBeUndefined();
     }
-    expect(configs['councillor-alpha']?.color).toBe(
-      DEFAULT_AGENT_COLORS.councillor,
-    );
+    expect(configs['councillor-alpha']?.color).toBeUndefined();
   });
 
-  test('configured colors override defaults and flow to custom agents', () => {
+  test('configured colors flow to built-in and custom agents', () => {
     const configs = getAgentConfigs(
       runtimeFor({
         agents: {
