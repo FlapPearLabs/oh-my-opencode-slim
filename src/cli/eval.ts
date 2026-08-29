@@ -119,6 +119,16 @@ if (values.precheck) {
   const suiteDirs = entries.filter(
     (e) => e.isDirectory() && e.name !== 'results' && e.name !== '__tests__',
   );
+
+  const NEUTRAL_CATEGORIES = new Set([
+    'natural-routing',
+    'direct-execution',
+    'skill-trigger',
+    'response-quality',
+    'execution',
+  ]);
+  const AGENT_MENTION = /@([a-zA-Z-]+)/;
+
   let totalCases = 0;
   let issues = 0;
   for (const dir of suiteDirs) {
@@ -147,6 +157,19 @@ if (values.precheck) {
     }
     const evals = (parsed as { evals?: unknown[] }).evals ?? [];
     totalCases += evals.length;
+
+    // Non-fatal warning: neutral-category evals must not name @agent
+    for (const c of result.data.evals) {
+      if (c.category && NEUTRAL_CATEGORIES.has(c.category)) {
+        const match = c.prompt.match(AGENT_MENTION);
+        if (match) {
+          console.warn(
+            `[warn] ${dir.name}/${c.id}: prompt names @${match[1]} but category ${c.category} expects neutral routing`,
+          );
+        }
+      }
+    }
+
     for (const c of result.data.evals) {
       if (!c.id || !c.prompt) {
         console.error(`✗ ${dir.name}/${c.id}: missing id or prompt`);
@@ -180,9 +203,14 @@ if (values.diff) {
   }
   let baseline: EvalSuiteResult | undefined;
   if (values.baseline) {
-    baseline = JSON.parse(
-      readFileSync(values.baseline, 'utf-8'),
-    ) as EvalSuiteResult;
+    try {
+      baseline = JSON.parse(
+        readFileSync(values.baseline, 'utf-8'),
+      ) as EvalSuiteResult;
+    } catch {
+      console.error(`Failed to read baseline file: ${values.baseline}`);
+      process.exit(1);
+    }
   }
   const currentResult = loadLatestResultPath(values.suite);
   if (!currentResult) {
@@ -368,6 +396,7 @@ for (const suite of suites) {
       failed: false,
       skipped: true,
     });
+    continue;
   }
   try {
     const data = JSON.parse(
