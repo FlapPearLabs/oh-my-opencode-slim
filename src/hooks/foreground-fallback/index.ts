@@ -540,6 +540,9 @@ export class ForegroundFallbackManager {
    *   (one retry chance); 2 = exhausted again, aborted — stop intervening.
    *   Reset to 0 on successful responses or session deletion. */
   private readonly chainExhaustion = new Map<string, number>();
+  /** Errors deferred while background siblings were running. Re-triggered
+   *  in handleEvent when the last sibling completes. */
+  private readonly deferredErrors = new Map<string, unknown>();
 
   /** Exposed for task-session-manager: prevents idle reconciliation
    *  while a fallback abort/re-prompt is in flight for this session. */
@@ -557,6 +560,7 @@ export class ForegroundFallbackManager {
   willAttemptFallback(sessionID: string): boolean {
     if (!this.enabled) return false;
     if (this.inProgress.has(sessionID)) return true;
+    if (this.deferredErrors.has(sessionID)) return true;
     return (
       this.hasFallbackChain(sessionID) &&
       (this.chainExhaustion.get(sessionID) ?? 0) < 2
@@ -617,6 +621,7 @@ export class ForegroundFallbackManager {
         this.sessionRetries.delete(id);
         this.sessionSameModelRetries.delete(id);
         this.chainExhaustion.delete(id);
+        this.deferredErrors.delete(id);
       });
     }
   }
@@ -629,6 +634,17 @@ export class ForegroundFallbackManager {
     if (!this.enabled) return;
     const event = rawEvent as { type: string; properties?: unknown };
     if (!event?.type) return;
+
+    // Process deferred errors — re-trigger when background siblings complete.
+    if (this.deferredErrors.size > 0) {
+      for (const [sessionID, error] of this.deferredErrors) {
+        if (this.hasRunningSiblings(sessionID)) continue;
+        this.deferredErrors.delete(sessionID);
+        // Use tryFallbackWithAbort which handles all actions (fallback
+        // switches, same-model retry, surface/absorb).
+        await this.tryFallbackWithAbort(sessionID, error);
+      }
+    }
 
     switch (event.type) {
       case 'message.updated': {
@@ -821,7 +837,10 @@ export class ForegroundFallbackManager {
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    if (this.hasRunningSiblings(sessionID)) return;
+    if (this.hasRunningSiblings(sessionID)) {
+      this.deferredErrors.set(sessionID, error);
+      return;
+    }
 
     const action = classifyError(error);
     if (action === 'surface' || action === 'absorb') return;
@@ -859,7 +878,10 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    if (this.hasRunningSiblings(sessionID)) return;
+    if (this.hasRunningSiblings(sessionID)) {
+      this.deferredErrors.set(sessionID, error);
+      return;
+    }
 
     const action = classifyError(error);
     if (action === 'surface' || action === 'absorb') return;
@@ -910,7 +932,13 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    if (this.hasRunningSiblings(sessionID)) return;
+    if (this.hasRunningSiblings(sessionID)) {
+      // Error was already classified by caller — store it.
+      // The caller tried to classify before routing to retrySameModel,
+      // so re-trigger via tryFallbackWithAbort which re-classifies from scratch.
+      this.deferredErrors.set(sessionID, error as unknown);
+      return;
+    }
     this.inProgress.add(sessionID);
     try {
       const tried = this.sessionSameModelRetries.get(sessionID) ?? 0;
