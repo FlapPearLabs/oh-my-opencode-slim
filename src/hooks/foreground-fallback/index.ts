@@ -943,6 +943,9 @@ export class ForegroundFallbackManager {
       setTimeout(resolve, delay);
       await promise;
 
+      // If the counter was cleared during backoff, the session recovered
+      // (successful assistant response handler deletes it). Don't abort.
+      if (!this.sessionSameModelRetries.has(sessionID)) return;
       await abortSessionWithTimeout(getClient(this.input), sessionID);
 
       const replayParts = partsFromReplayMessage(lastUser) as Array<{
