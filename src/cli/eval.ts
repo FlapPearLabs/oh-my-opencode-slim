@@ -17,12 +17,27 @@ import { runSuite } from '../evals/suite-runner';
 import { loadEvalSuite, loadEvalSuites } from '../evals/suites';
 import { runPromptCli } from '../utils/session';
 
-/** Kill stale opencode on port 4096, spawn a fresh serve, health-check. */
+/** Ensure an opencode serve on port 4096 — reuse if healthy, spawn if missing. */
 async function startServe(): Promise<{
   url: string;
-  proc: ReturnType<typeof spawn>;
+  proc: ReturnType<typeof spawn> | null;
 }> {
   const serveUrl = 'http://localhost:4096';
+
+  // Check if a healthy server is already running (developer-owned)
+  try {
+    const res = await fetch(`${serveUrl}/session`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (res.ok) {
+      console.log(`Using existing OpenCode server at ${serveUrl}`);
+      return { url: serveUrl, proc: null };
+    }
+  } catch {
+    // no server — will spawn one
+  }
+
+  // Kill any stale opencode on port 4096 (crash orphan) before spawning
   const lsofProc = Bun.spawnSync(['lsof', '-ti', 'tcp:4096']);
   if (lsofProc.exitCode === 0) {
     const pids = lsofProc.stdout.toString().trim().split('\n').filter(Boolean);
@@ -38,6 +53,7 @@ async function startServe(): Promise<{
     }
   }
   await Bun.sleep(500);
+
   const serveProc = spawn('opencode', ['serve'], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -339,6 +355,7 @@ for (const suite of suites) {
   try {
     files = readdirSync(resultsDir)
       .filter((f) => f.startsWith(`${suite}-`) && f.endsWith('.json'))
+      .filter((f) => !beforeFiles.has(f))
       .sort()
       .reverse();
   } catch {
