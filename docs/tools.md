@@ -38,6 +38,12 @@ Fast, structural code search and refactoring - more powerful than plain text gre
 
 `ast_grep` understands code structure, so it can find patterns like "all arrow functions that return a JSX element" rather than relying on exact text matching.
 
+Before the built-in `grep`/`glob` tools run, the plugin pre-checks that the
+requested `path` exists (resolved against the project directory, mirroring the
+host's resolution rule). A missing path fails fast with an actionable error
+instead of an opaque "ripgrep execution failed" message or a silent search of
+the parent directory.
+
 ---
 
 ## Background Task Control
