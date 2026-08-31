@@ -161,6 +161,9 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.orchestratorWake.intervalMs` | integer | `300000` | Continuous parent-idle interval between wake evaluations (`60000`–`2147483647` ms). `0` is invalid. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native `task(..., background: true)` child sessions are supervised; accepted values are `60000`–`2147483647` milliseconds See [Background Job Management](#background-job-management). |
 | `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace See [Background Job Management](#background-job-management). |
+| `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` disables the default cap; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
+| `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `1`–`1000`; provider and model caps apply alongside the default cap See [Background Job Management](#background-job-management). |
+| `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `1`–`1000`; model caps apply alongside provider and default caps See [Background Job Management](#background-job-management). |
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. |
@@ -312,7 +315,16 @@ The wall-clock supervisor is separately opt-in and remains disabled unless
       "intervalMs": 300000
     },
     "wallClockTimeoutMs": 900000,
-    "abortGraceMs": 10000
+    "abortGraceMs": 10000,
+    "concurrency": {
+      "defaultConcurrency": 2,
+      "providerConcurrency": {
+        "openai": 2
+      },
+      "modelConcurrency": {
+        "openai/gpt-5.6-luna": 1
+      }
+    }
   }
 }
 ```
@@ -322,6 +334,28 @@ Set `enabled: false` to keep idle reconciliation and background-job orchestratio
 without periodic wake prompts. See the
 [Background Orchestration](background-orchestration.md) guide for the concept,
 defaults, and examples.
+
+`concurrency` limits only native background tasks with
+`task(..., background: true)`. Foreground tasks are unchanged. A task waits
+for admission before OpenCode creates its child session, so queued work does
+not consume a provider request. `defaultConcurrency: 0` means unlimited by
+default. Provider and model limits are additional caps, and the most specific
+model cap does not allow a task to exceed its provider or default cap. Queued
+tasks are admitted in order among tasks whose configured provider/model caps
+have capacity. Terminal completion, cancellation, failure, session deletion,
+and plugin disposal release the slot.
+
+Two behaviors to know about when concurrency is enabled:
+
+- Sessions that are themselves managed tasks (a background subagent
+  orchestrating its own nested `task(..., background: true)` calls) are
+  exempt from admission. They already hold a slot while running, so waiting
+  for a second one would self-deadlock once the queue saturates.
+- Admission has no timeout of its own. A running task that never reaches a
+  terminal state keeps its slot forever, and queued tasks as well as the
+  orchestrator's `task` calls block behind it. When you enable
+  `concurrency`, pair it with an opt-in `wallClockTimeoutMs` so stalled
+  tasks are eventually forced to a terminal state and release their slots.
 
 Configurations that still use the removed `backgroundJobs.continueOnIdle` key
 emit a deprecation warning and migrate its boolean value to

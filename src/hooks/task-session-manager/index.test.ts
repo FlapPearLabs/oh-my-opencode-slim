@@ -4,6 +4,7 @@ import { SessionLifecycle } from '../../hooks/session-lifecycle';
 import {
   BackgroundJobBoard,
   BackgroundJobSupervisor,
+  BackgroundTaskConcurrency,
   createInternalAgentTextPart,
   getBackgroundJobLifecycleLedger,
   SLIM_INTERNAL_INITIATOR_MARKER,
@@ -114,6 +115,8 @@ type HookOptions = {
   willAttemptFallback?: (sessionID: string) => boolean;
   coordinator?: SessionLifecycle;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
+  backgroundTaskConcurrency?: BackgroundTaskConcurrency;
+  getModelForAgent?: (agentType: string) => string | undefined;
 };
 
 function createHook(options?: HookOptions) {
@@ -137,6 +140,8 @@ function createHook(options?: HookOptions) {
       readContextMaxFiles: options?.readContextMaxFiles,
       backgroundJobBoard: options?.backgroundJobBoard,
       backgroundJobSupervisor: options?.backgroundJobSupervisor,
+      backgroundTaskConcurrency: options?.backgroundTaskConcurrency,
+      getModelForAgent: options?.getModelForAgent,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
       isFallbackInProgress: options?.isFallbackInProgress,
@@ -234,6 +239,98 @@ describe('task-session-manager hook', () => {
   beforeEach(() => {
     // Process-global gate only — never reset inside createHook/production paths.
     resetUserWaitGateForTests();
+  });
+
+  test('queues background task admission until an earlier task releases its slot', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const { hook } = createHook({
+      backgroundTaskConcurrency: concurrency,
+      getModelForAgent: () => 'openai/fast',
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'first task',
+        },
+      },
+    );
+
+    const secondAdmission = hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      },
+    );
+    await Promise.resolve();
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 1 });
+
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { output: taskLaunchOutput('ses_first') },
+    );
+    concurrency.releaseTask('ses_first');
+    await secondAdmission;
+
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+  });
+
+  test('exempts managed-task sessions from background admission (nested orchestration)', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    // A session that is itself a managed background task.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_child',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'nested orchestrator',
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundTaskConcurrency: concurrency,
+      getModelForAgent: () => 'openai/fast',
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'outer task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+
+    // The only slot is taken, so a non-exempt caller would queue here and
+    // never be admitted while the managed child stays blocked on itself.
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'ses_child', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'librarian',
+          description: 'nested task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
   });
 
   test('ignores messages without OpenCode info or parts', async () => {

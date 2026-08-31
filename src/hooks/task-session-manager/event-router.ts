@@ -287,6 +287,8 @@ export async function handleEvent(
     >;
     retainedBoardSnapshots: Map<string, RetainedBoardSnapshotState>;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
+    bindConcurrencyTicket?: (taskID: string, pending: PendingTaskCall) => void;
+    releaseConcurrencyTask?: (taskID: string) => void;
     observeSyntheticTerminalPart?: (part: unknown) => void;
     revivedRunTracker?: RevivedRunTracker;
   },
@@ -353,6 +355,7 @@ export async function handleEvent(
               background: false,
             });
             pending.earlyRegisteredTaskID = record.taskID;
+            deps.bindConcurrencyTicket?.(record.taskID, pending);
             log(
               '[task-session-manager] tentative early board registration from session.created',
               {

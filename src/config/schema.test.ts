@@ -243,6 +243,48 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
   });
 
+  it('defaults background task concurrency limits to disabled', () => {
+    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.concurrency).toEqual({
+        defaultConcurrency: 0,
+        providerConcurrency: {},
+        modelConcurrency: {},
+      });
+    }
+  });
+
+  it('accepts default, provider, and model concurrency limits', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: {
+        concurrency: {
+          defaultConcurrency: 2,
+          providerConcurrency: { openai: 3 },
+          modelConcurrency: { 'openai/gpt-5.6-luna': 1 },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects invalid background task concurrency limits', () => {
+    for (const concurrency of [
+      { defaultConcurrency: -1 },
+      { defaultConcurrency: 1001 },
+      { defaultConcurrency: 1.5 },
+      { providerConcurrency: { openai: 0 } },
+      { modelConcurrency: { 'openai/gpt-5.6-luna': 1.5 } },
+    ]) {
+      expect(
+        PluginConfigSchema.safeParse({ backgroundJobs: { concurrency } })
+          .success,
+      ).toBe(false);
+    }
+  });
+
   it('accepts the documented wall-clock supervisor bounds', () => {
     expect(
       PluginConfigSchema.safeParse({

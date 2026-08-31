@@ -479,6 +479,27 @@ uncertain`; they never prove that a job stopped or completed and do not confirm
 a pending stop. Each observation is generation-aware, so a delayed response
 cannot modify a relaunched task.
 
+### Background Task Concurrency
+
+`backgroundJobs.concurrency` (disabled by default, see
+[Configuration](configuration.md#background-job-management)) caps how many
+native background tasks may run at once. Admission happens in the
+`tool.execute.before` hook: a task waits for a slot before OpenCode creates
+its child session. Queued requests are admitted in order, but requests whose
+provider or model quota is saturated are skipped in favor of admittable later
+requests.
+
+Sessions that are themselves managed tasks — a background subagent running
+its own nested `task(..., background: true)` calls — are exempt from
+admission. They already hold a slot while running, so waiting for a second
+one would self-deadlock once the queue saturates.
+
+Admission itself has no timeout. A running task that never reaches a terminal
+state keeps its slot forever, and queued tasks as well as the orchestrator's
+`task` calls block behind it. When you enable `concurrency`, pair it with the
+opt-in wall-clock supervisor below so stalled tasks are eventually forced to
+a terminal state and release their slots.
+
 ### Opt-in Wall-clock Supervisor
 
 The plugin can apply a one-shot wall-clock deadline to native background task

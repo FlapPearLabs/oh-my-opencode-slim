@@ -1,4 +1,5 @@
 import type { BackgroundJobLease } from '../../utils/background-job-board';
+import type { BackgroundTaskConcurrencyTicket } from '../../utils/background-task-concurrency';
 
 export interface PendingTaskCall {
   callId: string;
@@ -13,6 +14,7 @@ export interface PendingTaskCall {
   lifecycleEpoch: number;
   resumedTaskId?: string;
   relaunchLease?: BackgroundJobLease;
+  concurrencyTicket?: BackgroundTaskConcurrencyTicket;
   earlyRegisteredTaskID?: string;
   earlyRegistrationRejected?: boolean;
 }
@@ -27,6 +29,7 @@ export function createPendingCallTracker(
 
   const releaseCallLease = (call: PendingTaskCall): void => {
     if (call.relaunchLease) options.releaseLease?.(call.relaunchLease);
+    call.concurrencyTicket?.releaseIfUnbound();
   };
 
   return {

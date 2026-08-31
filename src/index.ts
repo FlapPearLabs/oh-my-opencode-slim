@@ -76,6 +76,7 @@ import {
   BackgroundJobBoard,
   BackgroundJobCoordinator,
   BackgroundJobSupervisor,
+  BackgroundTaskConcurrency,
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
@@ -251,6 +252,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
   let backgroundJobSupervisor: BackgroundJobSupervisor;
+  let backgroundTaskConcurrency: BackgroundTaskConcurrency;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let companionManager: CompanionManager;
   let taskCancelTools: ReturnType<typeof createCancelTaskTool>;
@@ -365,6 +367,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMinLines: runtime.backgroundJobs.readContextMinLines,
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
     });
+    backgroundTaskConcurrency = new BackgroundTaskConcurrency(
+      runtime.backgroundJobs.concurrency,
+    );
 
     // Initialize coordinator as the sole writer to the board
     const backgroundJobCoordinator = new BackgroundJobCoordinator(
@@ -381,6 +386,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       backgroundJobSupervisor.onTerminal(record);
+      backgroundTaskConcurrency.releaseTask(record.taskID);
     });
     revivedRunTracker = createRevivedRunTracker({
       input: ctx,
@@ -447,6 +453,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
       backgroundJobBoard: backgroundJobCoordinator,
       backgroundJobSupervisor,
+      backgroundTaskConcurrency,
+      getModelForAgent: (agentType: string) =>
+        pickAgentModelRef(runtime.agent(agentType)?.model),
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {
@@ -1202,6 +1211,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       await interviewManager.dispose();
       await multiplexerSessionManager.cleanupOnInstanceDisposed();
       clearTuiActivities();
+      backgroundTaskConcurrency.dispose();
     },
 
     'tool.execute.before': async (input, output) => {

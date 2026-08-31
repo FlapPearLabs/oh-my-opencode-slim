@@ -174,6 +174,39 @@ export const InterviewConfigSchema = z.object({
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
 
+const ConcurrencyLimitSchema = z.number().int().min(1).max(1000);
+
+export const BackgroundTaskConcurrencyConfigSchema = z
+  .object({
+    defaultConcurrency: z
+      .number()
+      .int()
+      .min(0)
+      .max(1000)
+      .default(0)
+      .describe(
+        'Maximum concurrently running native background tasks. 0 disables the default cap.',
+      ),
+    providerConcurrency: z
+      .record(z.string().min(1), ConcurrencyLimitSchema)
+      .default({})
+      .describe('Per-provider concurrency caps keyed by provider ID.'),
+    modelConcurrency: z
+      .record(z.string().min(1), ConcurrencyLimitSchema)
+      .default({})
+      .describe('Per-model concurrency caps keyed by provider/model ID.'),
+  })
+  .strict()
+  .default({
+    defaultConcurrency: 0,
+    providerConcurrency: {},
+    modelConcurrency: {},
+  });
+
+export type BackgroundTaskConcurrencyConfig = z.infer<
+  typeof BackgroundTaskConcurrencyConfigSchema
+>;
+
 export const BackgroundJobsConfigSchema = z.object({
   strategy: z
     .enum(['latest', 'checkpoint-compatible'])
@@ -231,6 +264,7 @@ export const BackgroundJobsConfigSchema = z.object({
     .describe(
       'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
     ),
+  concurrency: BackgroundTaskConcurrencyConfigSchema,
   waitForUserGuard: z
     .boolean()
     .default(true)

@@ -4,6 +4,7 @@ import {
   type BackgroundJobExecution,
   type BackgroundJobStore,
   type BackgroundJobSupervisor,
+  type BackgroundTaskConcurrency,
   clearBackgroundJobSuppression,
   deriveFullObjective,
   deriveTaskSessionLabel,
@@ -152,6 +153,8 @@ export function createTaskSessionManagerHook(
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobStore;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
+    backgroundTaskConcurrency?: BackgroundTaskConcurrency;
+    getModelForAgent?: (agentType: string) => string | undefined;
     shouldManageSession: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
@@ -281,6 +284,7 @@ export function createTaskSessionManagerHook(
       // lose track of the task and report it as cancelled even though the
       // oracle actually completed.
       if (!options.isFallbackInProgress?.(sessionId)) {
+        options.backgroundTaskConcurrency?.releaseTask(sessionId);
         options.backgroundJobSupervisor?.onSessionDeleted(sessionId);
         const hardTimedOut =
           backgroundJobBoard.field(sessionId, 'deadlineExceededAt') !==
@@ -404,6 +408,8 @@ export function createTaskSessionManagerHook(
         registerSessionAsOrchestrator: options.registerSessionAsOrchestrator,
         backgroundJobBoard,
         backgroundJobSupervisor: options.backgroundJobSupervisor,
+        backgroundTaskConcurrency: options.backgroundTaskConcurrency,
+        getModelForAgent: options.getModelForAgent,
         pendingCallTracker,
         taskContextTracker,
         getLifecycleEpoch: () => rehydrateState.nextEpoch,
@@ -417,6 +423,10 @@ export function createTaskSessionManagerHook(
         directory: _ctx.directory,
         backgroundJobBoard,
         backgroundJobSupervisor: options.backgroundJobSupervisor,
+        bindConcurrencyTicket: (taskID, pending) =>
+          pending.concurrencyTicket?.bind(taskID),
+        releaseConcurrencyTask: (taskID) =>
+          options.backgroundTaskConcurrency?.releaseTask(taskID),
         recordLifecycleSuppression: (taskID) =>
           recordBackgroundJobSuppression(backgroundJobBoard, taskID),
         pendingCallTracker,
@@ -533,6 +543,8 @@ export function createTaskSessionManagerHook(
         pendingInjectedTerminalJobsByParent,
         retainedBoardSnapshots: injectionState.retainedBoardSnapshots,
         backgroundJobSupervisor: options.backgroundJobSupervisor,
+        bindConcurrencyTicket: (taskID, pending) =>
+          pending.concurrencyTicket?.bind(taskID),
         observeSyntheticTerminalPart: (part) =>
           observeSyntheticTerminalPart(injectionState, part),
         revivedRunTracker: options.revivedRunTracker,
