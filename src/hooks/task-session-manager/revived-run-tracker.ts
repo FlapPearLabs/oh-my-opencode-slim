@@ -219,20 +219,20 @@ export function createRevivedRunTracker(options: {
       return updated?.generation === run.generation && finish(run, updated);
     }
 
-    if (run.stabilizationProbes < maxStabilizationProbes) {
-      run.stabilizationProbes += 1;
-      scheduleStabilizationProbe(run);
-      return false;
+    if (run.stabilizationProbes >= maxStabilizationProbes) {
+      const updated = options.backgroundJobBoard.updateStatus({
+        taskID: run.taskID,
+        expectedGeneration: run.generation,
+        state: 'error',
+        resultSummary: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+        lastStatusError: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+      });
+      return updated?.generation === run.generation && finish(run, updated);
     }
 
-    const updated = options.backgroundJobBoard.updateStatus({
-      taskID: run.taskID,
-      expectedGeneration: run.generation,
-      state: 'error',
-      resultSummary: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
-      lastStatusError: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
-    });
-    return updated?.generation === run.generation && finish(run, updated);
+    run.stabilizationProbes += 1;
+    scheduleStabilizationProbe(run);
+    return false;
   }
 
   function finish(run: RevivedRun, record: BackgroundJobRecord): boolean {
@@ -361,12 +361,7 @@ export function createRevivedRunTracker(options: {
   }
 
   function scheduleStabilizationProbe(run: RevivedRun): void {
-    if (
-      disposed ||
-      runs.get(run.taskID) !== run ||
-      run.stabilizationProbes >= maxStabilizationProbes ||
-      run.stabilizationTimer
-    ) {
+    if (disposed || runs.get(run.taskID) !== run || run.stabilizationTimer) {
       return;
     }
     run.stabilizationTimer = setTimeout(() => {
