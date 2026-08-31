@@ -396,6 +396,106 @@ describe('plugin TUI agent activity', () => {
   });
 });
 
+describe('background task admission model resolution', () => {
+  let originalEnv: typeof process.env;
+  let projectDir: string;
+  let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+
+  const createPlugin = () =>
+    plugin({
+      client: createPluginClient(async () => ({})),
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4098'),
+    } as never);
+
+  beforeEach(async () => {
+    originalEnv = { ...process.env };
+    projectDir = await mkdtemp('/tmp/oh-my-opencode-slim-concurrency-');
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: projectDir,
+      XDG_DATA_HOME: `${projectDir}/data`,
+      XDG_CACHE_HOME: `${projectDir}/cache`,
+      OPENCODE_LOG_DIR: `${projectDir}/logs`,
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        backgroundJobs: {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { openai: 1 },
+          },
+        },
+        agents: { fixer: { inheritModelFrom: 'session' } },
+      }),
+    );
+    hooks = await createPlugin();
+  });
+
+  afterEach(async () => {
+    await hooks?.dispose?.();
+    process.env = originalEnv;
+    await rm(projectDir, { recursive: true, force: true });
+  });
+
+  test('chat.message records the session model so session-inheriting tasks queue behind the parent provider cap', async () => {
+    // chat.message fires before message.updated and carries the message's
+    // model. Without recording it, a session-inheriting fixer task would be
+    // admitted with no model (default tier, no provider cap).
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'orchestrator-1',
+        agent: 'orchestrator',
+        model: { providerID: 'openai', modelID: 'gpt-4o' },
+      } as never,
+      {} as never,
+    );
+
+    const before = hooks?.['tool.execute.before'];
+    expect(before).toBeFunction();
+
+    const first = before?.(
+      { tool: 'task', sessionID: 'orchestrator-1', callID: 'call-1' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'first task',
+        },
+      } as never,
+    );
+    const second = before?.(
+      { tool: 'task', sessionID: 'orchestrator-1', callID: 'call-2' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      } as never,
+    );
+
+    // The first fixer task holds the single openai slot (resolved from the
+    // parent's model recorded by chat.message); the second must stay queued.
+    // (Slot release happens via board terminal outcomes, out of scope here.)
+    await first;
+    const outcome = await Promise.race([
+      second?.then(
+        () => 'admitted',
+        (e) => `rejected:${String(e)}`,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('still-queued'), 100),
+      ),
+    ]);
+    expect(outcome).toBe('still-queued');
+  });
+});
+
 describe('plugin config model inheritance', () => {
   let originalEnv: typeof process.env;
   const configDirs: string[] = [];

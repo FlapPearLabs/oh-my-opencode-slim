@@ -4,6 +4,7 @@ import {
   createAgents,
   getAgentConfigs,
   isSubagent,
+  resolveAgentConfigModel,
 } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
@@ -76,8 +77,9 @@ import {
   BackgroundJobBoard,
   BackgroundJobCoordinator,
   BackgroundJobSupervisor,
-  BackgroundTaskConcurrency,
+  type BackgroundTaskConcurrency,
   createDisplayNameMentionRewriter,
+  getBackgroundTaskConcurrency,
   resolveRuntimeAgentName,
 } from './utils';
 import type { ContextFile } from './utils/background-job-board';
@@ -367,7 +369,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMinLines: runtime.backgroundJobs.readContextMinLines,
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
     });
-    backgroundTaskConcurrency = new BackgroundTaskConcurrency(
+    backgroundTaskConcurrency = getBackgroundTaskConcurrency(
+      ctx.directory,
       runtime.backgroundJobs.concurrency,
     );
 
@@ -440,6 +443,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ctx,
       runtime.fallback.maxRetries,
       sessionLifecycle,
+      // A managed background-task session switching models mid-flight must
+      // move its admission accounting (provider/model caps) to the new
+      // model. No-op for unknown/non-task sessions; idempotent per model.
+      (sessionID, model) =>
+        backgroundTaskConcurrency.migrateTask(sessionID, model),
     );
 
     deepworkCommandHook = createDeepworkCommandHook();
@@ -454,8 +462,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       backgroundJobBoard: backgroundJobCoordinator,
       backgroundJobSupervisor,
       backgroundTaskConcurrency,
-      getModelForAgent: (agentType: string) =>
-        pickAgentModelRef(runtime.agent(agentType)?.model),
+      getModelForAgent: (agentType: string, parentSessionID?: string) =>
+        // The model the spawned subagent's config actually carries — the
+        // same resolution createAgents/final config use (explicit model,
+        // inheritModelFrom, fixer→librarian, preset primary). When the agent
+        // config ends up model-less (session inheritance), OpenCode serves
+        // the parent session's current model, tracked per session here.
+        resolveAgentConfigModel(runtime, agentType) ??
+        (parentSessionID
+          ? sessionMetadata.getModel(parentSessionID)
+          : undefined),
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {
@@ -1082,6 +1098,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             : typeof info?.model?.modelID === 'string'
               ? info.model.modelID
               : undefined;
+        // Track each session's current model so background task admission
+        // can resolve the model a model-less subagent will inherit.
+        if (typeof info?.sessionID === 'string' && providerID && modelID) {
+          const model = `${providerID}/${modelID}`;
+          sessionMetadata.setModel(info.sessionID, model);
+          // Managed background-task sessions are identified by their session
+          // ID. If the model serving one changed (fallback re-prompt, runtime
+          // switch), migrate the admission accounting so provider/model caps
+          // keep tracking the model actually in use. No-op for other
+          // sessions and idempotent when the model is unchanged.
+          backgroundTaskConcurrency.migrateTask(info.sessionID, model);
+        }
         if (typeof info?.agent === 'string' && providerID && modelID) {
           const agentName = resolveRuntimeAgentName(runtime, info.agent);
           const model = `${providerID}/${modelID}`;
@@ -1211,7 +1239,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       await interviewManager.dispose();
       await multiplexerSessionManager.cleanupOnInstanceDisposed();
       clearTuiActivities();
-      backgroundTaskConcurrency.dispose();
+      // The concurrency scheduler is process-scoped and deliberately NOT
+      // disposed here: the plugin dispose hook also runs on re-inits
+      // (config update → Instance.dispose), and disposing it would drop the
+      // admission state (running slots + queued tickets) that must survive
+      // for the new plugin generation. Its per-task slots are released as
+      // tasks reach terminal states; the process reaps it on exit.
     },
 
     'tool.execute.before': async (input, output) => {
@@ -1321,6 +1354,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           agent,
           status: 'busy',
         });
+      }
+
+      // chat.message carries the model selected for this message, and it
+      // fires before the message.updated event that the event hook relies
+      // on. Recording it here closes the early window where a session-
+      // inheriting background task could be admitted before its parent's
+      // model is known — admission then resolves the correct provider/model
+      // cap immediately.
+      const messageModel = input.model ?? output?.message?.model;
+      if (
+        messageModel &&
+        typeof messageModel.providerID === 'string' &&
+        typeof messageModel.modelID === 'string'
+      ) {
+        const model = `${messageModel.providerID}/${messageModel.modelID}`;
+        sessionMetadata.setModel(input.sessionID, model);
+        backgroundTaskConcurrency.migrateTask(input.sessionID, model);
       }
       taskSessionManagerHook.observeChatMessage(input, output);
       orchestratorWakeScheduler.observeChatMessage(input, output);

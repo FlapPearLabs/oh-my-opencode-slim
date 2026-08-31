@@ -486,8 +486,22 @@ cannot modify a relaunched task.
 native background tasks may run at once. Admission happens in the
 `tool.execute.before` hook: a task waits for a slot before OpenCode creates
 its child session. Queued requests are admitted in order, but requests whose
-provider or model quota is saturated are skipped in favor of admittable later
-requests.
+resolved cap is saturated are skipped in favor of admittable later requests.
+
+Only the most specific configured cap applies to a task: a model cap wins
+over a provider cap, which wins over the default cap. `0` means unlimited.
+So `modelConcurrency: {"openai/gpt-4o": 10}` permits 10 concurrent
+`openai/gpt-4o` tasks even when `defaultConcurrency` is lower; other OpenAI
+models fall back to `providerConcurrency` (or the default) instead.
+
+The scheduler keeps its accounting correct across two runtime events:
+- A task that switches models mid-flight (foreground model fallback or a
+  runtime `/model` change on the child session) moves its provider/model
+  accounting to the new model instead of keeping the admission-time model.
+- The scheduler is process-scoped, so a plugin re-init (the plugin factory
+  re-runs on config updates) preserves both running slots and queued
+  tickets. Deleting a parent orchestrator also releases its children's
+  admission slots, so capacity is never leaked by recursive-delete ordering.
 
 Sessions that are themselves managed tasks — a background subagent running
 its own nested `task(..., background: true)` calls — are exempt from

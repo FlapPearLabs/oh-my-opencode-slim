@@ -57,6 +57,11 @@ function rehydrateHistoricalRunningTasks(
   shouldManageSession: (sessionID: string) => boolean,
   registerSessionAsOrchestrator?: (sessionID: string) => void,
   rehydrateTombstones?: ReadonlySet<string>,
+  backgroundTaskConcurrency?: BackgroundTaskConcurrency,
+  getModelForAgent?: (
+    agentType: string,
+    parentSessionID?: string,
+  ) => string | undefined,
 ): number {
   let rehydrated = 0;
   const managedOrchestratorSessionIDs = new Set<string>();
@@ -136,6 +141,16 @@ function rehydrateHistoricalRunningTasks(
         // to the first runtime-status reconciliation.
         now: 0,
       });
+      // Re-claim the admission slot this still-running task already holds.
+      // The scheduler is recreated on every plugin re-init (the factory re-
+      // runs on config updates), so without this restore a fresh scheduler
+      // would admit a second concurrent task past the configured cap. The
+      // model resolution mirrors admission so provider/model caps stay
+      // correct. Idempotent per taskID.
+      backgroundTaskConcurrency?.restoreTask(
+        taskID,
+        getModelForAgent?.(agent, parentSessionID),
+      );
       rehydrated += 1;
     }
   }
@@ -154,7 +169,10 @@ export function createTaskSessionManagerHook(
     backgroundJobBoard?: BackgroundJobStore;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
-    getModelForAgent?: (agentType: string) => string | undefined;
+    getModelForAgent?: (
+      agentType: string,
+      parentSessionID?: string,
+    ) => string | undefined;
     shouldManageSession: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
@@ -285,6 +303,14 @@ export function createTaskSessionManagerHook(
       // oracle actually completed.
       if (!options.isFallbackInProgress?.(sessionId)) {
         options.backgroundTaskConcurrency?.releaseTask(sessionId);
+        // The parent's child tasks are about to be dropped from the board.
+        // Normally each child's own session.deleted releases its admission
+        // slot, but a recursive delete can arrive parent-first, and a child
+        // mid-fallback is skipped entirely — release every child's slot here
+        // so none is left holding capacity forever. Idempotent per taskID.
+        for (const child of backgroundJobBoard.list(sessionId)) {
+          options.backgroundTaskConcurrency?.releaseTask(child.taskID);
+        }
         options.backgroundJobSupervisor?.onSessionDeleted(sessionId);
         const hardTimedOut =
           backgroundJobBoard.field(sessionId, 'deadlineExceededAt') !==
@@ -459,6 +485,8 @@ export function createTaskSessionManagerHook(
         options.shouldManageSession,
         options.registerSessionAsOrchestrator,
         rehydrateTombstones,
+        options.backgroundTaskConcurrency,
+        options.getModelForAgent,
       );
 
       for (const [messageIndex, message] of messages.entries()) {

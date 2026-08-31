@@ -174,7 +174,7 @@ export const InterviewConfigSchema = z.object({
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
 
-const ConcurrencyLimitSchema = z.number().int().min(1).max(1000);
+const ConcurrencyLimitSchema = z.number().int().min(0).max(1000);
 
 export const BackgroundTaskConcurrencyConfigSchema = z
   .object({
@@ -190,11 +190,15 @@ export const BackgroundTaskConcurrencyConfigSchema = z
     providerConcurrency: z
       .record(z.string().min(1), ConcurrencyLimitSchema)
       .default({})
-      .describe('Per-provider concurrency caps keyed by provider ID.'),
+      .describe(
+        'Per-provider concurrency caps keyed by provider ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that provider.',
+      ),
     modelConcurrency: z
       .record(z.string().min(1), ConcurrencyLimitSchema)
       .default({})
-      .describe('Per-model concurrency caps keyed by provider/model ID.'),
+      .describe(
+        'Per-model concurrency caps keyed by provider/model ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that model.',
+      ),
   })
   .strict()
   .default({

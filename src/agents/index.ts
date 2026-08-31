@@ -220,6 +220,62 @@ function applyModelInheritance(
 }
 
 /**
+ * Resolve the model an agent's final config carries, mirroring the combined
+ * effect of `createAgents` fallbacks, `applyOverrides`, and the inheritance
+ * passes. Returns `undefined` exactly when the agent config ends up with NO
+ * model key — i.e. `inheritModelFrom: 'session'` (or `'orchestrator'` with no
+ * configured orchestrator model) — in which case OpenCode serves the agent
+ * with the parent session's current model.
+ *
+ * This is the single resolution source for both agent definition building and
+ * background-task admission, so provider/model concurrency accounting keys off
+ * the model the spawned subagent actually uses. Explicit `model` wins; then
+ * `inheritModelFrom`; then the historical fixer → librarian fallback; then
+ * the preset primary model; then the per-agent default.
+ */
+export function resolveAgentConfigModel(
+  runtime: RuntimeConfig,
+  name: string,
+): string | undefined {
+  const mergedAgents = runtime.agents();
+  const override = getOverrideFromAgents(mergedAgents, name);
+  if (override?.model !== undefined) {
+    return getPrimaryModelFromOverride(override);
+  }
+  if (override?.inheritModelFrom === 'session') {
+    return undefined;
+  }
+  if (override?.inheritModelFrom === 'orchestrator') {
+    return getPrimaryModelFromOverride(
+      getOverrideFromAgents(mergedAgents, 'orchestrator'),
+    );
+  }
+  // Dynamic councillors are defined outside `agents()` under the selected
+  // council preset. Their generated agent config carries the preset model.
+  if (name.startsWith('councillor-')) {
+    const seat = name.slice('councillor-'.length);
+    const preset =
+      runtime.council?.presets?.[runtime.council.default_preset ?? 'default'];
+    return preset?.[seat]?.models?.[0]?.id;
+  }
+  // ACP agents are generated from `acpAgents`; admission is for the wrapper
+  // session, so account for its configured wrapper model when present.
+  if (runtime.acpAgents[name]?.wrapperModel) {
+    return runtime.acpAgents[name].wrapperModel;
+  }
+  if (name === 'fixer') {
+    const librarianModel = getPrimaryModelFromOverride(
+      getOverrideFromAgents(mergedAgents, 'librarian'),
+    );
+    return librarianModel ?? runtime.primaryModel ?? DEFAULT_MODELS.librarian;
+  }
+  return (
+    runtime.primaryModel ??
+    (DEFAULT_MODELS as Record<string, string | undefined>)[name]
+  );
+}
+
+/**
  * Apply model inheritance to the final host agent config after the host layer
  * has been merged. This clears stale host models for `session` inheritance,
  * which cannot be handled by the agent definition alone.

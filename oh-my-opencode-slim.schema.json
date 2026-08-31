@@ -1166,14 +1166,14 @@
           "properties": {
             "defaultConcurrency": {
               "default": 0,
-              "description": "Maximum concurrently running native background tasks. 0 disables the default cap.",
+              "description": "Maximum concurrently running native background tasks. 0 means unlimited.",
               "type": "integer",
               "minimum": 0,
               "maximum": 1000
             },
             "providerConcurrency": {
               "default": {},
-              "description": "Per-provider concurrency caps keyed by provider ID.",
+              "description": "Per-provider concurrency caps keyed by provider ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that provider.",
               "type": "object",
               "propertyNames": {
                 "type": "string",
@@ -1181,13 +1181,13 @@
               },
               "additionalProperties": {
                 "type": "integer",
-                "minimum": 1,
+                "minimum": 0,
                 "maximum": 1000
               }
             },
             "modelConcurrency": {
               "default": {},
-              "description": "Per-model concurrency caps keyed by provider/model ID.",
+              "description": "Per-model concurrency caps keyed by provider/model ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that model.",
               "type": "object",
               "propertyNames": {
                 "type": "string",
@@ -1195,7 +1195,7 @@
               },
               "additionalProperties": {
                 "type": "integer",
-                "minimum": 1,
+                "minimum": 0,
                 "maximum": 1000
               }
             }

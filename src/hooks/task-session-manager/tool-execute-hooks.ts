@@ -80,7 +80,10 @@ export async function handleToolExecuteBefore(
     taskContextTracker: { pendingManagedTaskIds: Set<string> };
     backgroundJobSupervisor?: BackgroundJobSupervisor;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
-    getModelForAgent?: (agentType: string) => string | undefined;
+    getModelForAgent?: (
+      agentType: string,
+      parentSessionID?: string,
+    ) => string | undefined;
     getLifecycleEpoch?: () => number;
   },
 ): Promise<void> {
@@ -230,7 +233,10 @@ export async function handleToolExecuteBefore(
         .has(input.sessionID);
       if (!isManagedTask) {
         const ticket = deps.backgroundTaskConcurrency.acquire({
-          model: deps.getModelForAgent?.(agentType),
+          model: deps.getModelForAgent?.(
+            agentType,
+            pendingCall.parentSessionId,
+          ),
         });
         pendingCall.concurrencyTicket = ticket;
         await ticket.ready;

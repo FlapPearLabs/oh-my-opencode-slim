@@ -275,13 +275,37 @@ describe('PluginConfigSchema backgroundJobs', () => {
       { defaultConcurrency: -1 },
       { defaultConcurrency: 1001 },
       { defaultConcurrency: 1.5 },
-      { providerConcurrency: { openai: 0 } },
+      { providerConcurrency: { openai: -1 } },
+      { providerConcurrency: { openai: 1.5 } },
+      { modelConcurrency: { 'openai/gpt-5.6-luna': -1 } },
       { modelConcurrency: { 'openai/gpt-5.6-luna': 1.5 } },
     ]) {
       expect(
         PluginConfigSchema.safeParse({ backgroundJobs: { concurrency } })
           .success,
       ).toBe(false);
+    }
+  });
+
+  it('accepts zero as unlimited for provider and model caps', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: {
+        concurrency: {
+          defaultConcurrency: 2,
+          providerConcurrency: { openai: 0 },
+          modelConcurrency: { 'openai/gpt-5.6-luna': 0 },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(
+        result.data.backgroundJobs?.concurrency?.providerConcurrency,
+      ).toEqual({ openai: 0 });
+      expect(result.data.backgroundJobs?.concurrency?.modelConcurrency).toEqual(
+        { 'openai/gpt-5.6-luna': 0 },
+      );
     }
   });
 

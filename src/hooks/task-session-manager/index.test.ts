@@ -6657,6 +6657,55 @@ describe('task-session-manager hook', () => {
     expect(job?.state).toBe('running');
   });
 
+  test('deleting a parent releases its children admission slots (recursive-delete ordering)', async () => {
+    // A recursive delete can arrive parent-first, and a child mid-fallback
+    // is skipped entirely, so the parent's cleanup must release every
+    // child's slot itself — otherwise capacity is leaked forever.
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'parent-1',
+      parentSessionID: 'grandparent',
+      agent: 'orchestrator',
+      description: 'parent orchestrator',
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'child one',
+    });
+    board.registerLaunch({
+      taskID: 'child-2',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'child two',
+    });
+
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 10,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    // Every task holds an admission slot, as if it were running.
+    concurrency.restoreTask('parent-1', 'openai/orch');
+    concurrency.restoreTask('child-1', 'openai/child1');
+    concurrency.restoreTask('child-2', 'openai/child2');
+    expect(concurrency.snapshot()).toEqual({ active: 3, queued: 0 });
+
+    createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      backgroundTaskConcurrency: concurrency,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => false,
+    });
+
+    coordinator.dispatchSessionDeleted('parent-1');
+
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+  });
+
   test('session.created early-registers board job so after-hook cancellation cannot orphan the child', async () => {
     // Reproduces #765: parent tool may be cancelled before tool.execute.after,
     // so the job never lands on the board. Early registration from

@@ -161,9 +161,9 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.orchestratorWake.intervalMs` | integer | `300000` | Continuous parent-idle interval between wake evaluations (`60000`–`2147483647` ms). `0` is invalid. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native `task(..., background: true)` child sessions are supervised; accepted values are `60000`–`2147483647` milliseconds See [Background Job Management](#background-job-management). |
 | `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace See [Background Job Management](#background-job-management). |
-| `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` disables the default cap; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
-| `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `1`–`1000`; provider and model caps apply alongside the default cap See [Background Job Management](#background-job-management). |
-| `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `1`–`1000`; model caps apply alongside provider and default caps See [Background Job Management](#background-job-management). |
+| `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
+| `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
+| `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. |
@@ -338,12 +338,20 @@ defaults, and examples.
 `concurrency` limits only native background tasks with
 `task(..., background: true)`. Foreground tasks are unchanged. A task waits
 for admission before OpenCode creates its child session, so queued work does
-not consume a provider request. `defaultConcurrency: 0` means unlimited by
-default. Provider and model limits are additional caps, and the most specific
-model cap does not allow a task to exceed its provider or default cap. Queued
-tasks are admitted in order among tasks whose configured provider/model caps
-have capacity. Terminal completion, cancellation, failure, session deletion,
-and plugin disposal release the slot.
+not consume a provider request. `0` means unlimited.
+
+Only the most specific configured cap applies to a task, matching the
+reference implementation's priority: a model cap for the task's model wins
+over a provider cap for its provider, which wins over the default cap. For
+example, with `defaultConcurrency: 2`, `providerConcurrency: {"openai": 5}`
+and `modelConcurrency: {"openai/gpt-4o": 10}`, up to 10 `openai/gpt-4o`
+tasks run concurrently. Queued tasks are admitted in order among tasks whose
+resolved cap has capacity. Terminal completion, cancellation, failure,
+session deletion, and plugin disposal release the slot. A task that switches
+models mid-flight (e.g. foreground model fallback) moves its accounting to
+the new model. The scheduler is process-scoped: when the plugin re-inits on a
+config update, running slots and queued tickets survive, so admission state
+is not reset mid-run.
 
 Two behaviors to know about when concurrency is enabled:
 
