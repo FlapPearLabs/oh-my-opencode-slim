@@ -307,6 +307,13 @@ export class ForegroundFallbackManager {
    *   (one retry chance); 2 = exhausted again, aborted — stop intervening.
    *   Reset to 0 on successful responses or session deletion. */
   private readonly chainExhaustion = new Map<string, number>();
+  /** sessionID → notified when the session switched to a new model mid-flight
+   *  (e.g. after a fallback re-prompt). Lets the background-task admission
+   *  scheduler migrate provider/model accounting to the new model. */
+  private readonly onSessionModelChanged?: (
+    sessionID: string,
+    model: string,
+  ) => void;
 
   /** Exposed for task-session-manager: prevents idle reconciliation
    *  while a fallback abort/re-prompt is in flight for this session. */
@@ -366,7 +373,9 @@ export class ForegroundFallbackManager {
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
+    onSessionModelChanged?: (sessionID: string, model: string) => void,
   ) {
+    this.onSessionModelChanged = onSessionModelChanged;
     if (coordinator) {
       coordinator.onSessionDeleted((id) => {
         this.sessionModel.delete(id);
@@ -806,6 +815,7 @@ export class ForegroundFallbackManager {
       }
 
       this.sessionModel.set(sessionID, nextModel);
+      this.onSessionModelChanged?.(sessionID, nextModel);
       log('[foreground-fallback] switched to fallback model', {
         sessionID,
         agentName,

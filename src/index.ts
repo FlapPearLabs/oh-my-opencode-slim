@@ -1,9 +1,14 @@
 import type { Plugin, ToolDefinition } from '@opencode-ai/plugin';
 import {
+  type AdmissionRuntimeLease,
+  acquireAdmissionRuntime,
+} from './admission-runtime';
+import {
   applyModelInheritanceToConfig,
   createAgents,
   getAgentConfigs,
   isSubagent,
+  resolvePrimaryModelValue,
 } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
@@ -77,6 +82,7 @@ import {
   BackgroundJobBoard,
   BackgroundJobCoordinator,
   BackgroundJobSupervisor,
+  type BackgroundTaskConcurrency,
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
@@ -253,6 +259,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
   let backgroundJobSupervisor: BackgroundJobSupervisor;
+  let backgroundTaskConcurrency: BackgroundTaskConcurrency;
+  let admissionRuntimeLease: AdmissionRuntimeLease | undefined;
+  let finalHostAgentConfig: Record<string, unknown> | undefined;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let companionManager: CompanionManager;
   let taskCancelTools: ReturnType<typeof createCancelTaskTool>;
@@ -276,6 +285,21 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Counters for post-init health check (set inside try, checked outside)
   let toolCount = 0;
+
+  const resolvePrimaryModelFromFinalHostConfig = (
+    agentType: string,
+  ): string | undefined => {
+    const readModel = (entry: unknown): string | undefined => {
+      if (entry === null || typeof entry !== 'object') return undefined;
+      return resolvePrimaryModelValue((entry as Record<string, unknown>).model);
+    };
+
+    const directModel = readModel(finalHostAgentConfig?.[agentType]);
+    if (directModel) return directModel;
+
+    const resolvedName = resolveRuntimeAgentName(runtime, agentType);
+    return readModel(finalHostAgentConfig?.[resolvedName]);
+  };
 
   try {
     config = loadPluginConfig(ctx.directory);
@@ -367,6 +391,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMinLines: runtime.backgroundJobs.readContextMinLines,
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
     });
+    admissionRuntimeLease = acquireAdmissionRuntime(
+      ctx.directory,
+      runtime.backgroundJobs.concurrency,
+    );
+    backgroundTaskConcurrency = admissionRuntimeLease.backgroundTaskConcurrency;
 
     // Initialize coordinator as the sole writer to the board
     const backgroundJobCoordinator = new BackgroundJobCoordinator(
@@ -383,6 +412,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       backgroundJobSupervisor.onTerminal(record);
+      backgroundTaskConcurrency.releaseTask(record.taskID);
     });
     revivedRunTracker = createRevivedRunTracker({
       input: ctx,
@@ -436,6 +466,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ctx,
       runtime.fallback.maxRetries,
       sessionLifecycle,
+      // A managed background-task session switching models mid-flight must
+      // move its admission accounting (provider/model caps) to the new
+      // model. No-op for unknown/non-task sessions; idempotent per model.
+      (sessionID, model) =>
+        backgroundTaskConcurrency.migrateTask(sessionID, model),
     );
 
     deepworkCommandHook = createDeepworkCommandHook();
@@ -449,6 +484,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
       backgroundJobBoard: backgroundJobCoordinator,
       backgroundJobSupervisor,
+      backgroundTaskConcurrency,
+      pendingCallTracker: admissionRuntimeLease.pendingCallTracker,
+      getModelForAgent: (agentType: string, parentSessionID?: string) =>
+        // Admission must use the config after the host has merged all of its
+        // agent layers. The direct lookup preserves display-name keys; the
+        // resolved lookup handles canonical names and legacy aliases. A
+        // parent model is only an inheritance fallback when neither final
+        // agent entry carries one.
+        resolvePrimaryModelFromFinalHostConfig(agentType) ??
+        (parentSessionID
+          ? sessionMetadata.getModel(parentSessionID)
+          : undefined),
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {
@@ -617,6 +664,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     toolCount = Object.keys(tools).length;
   } catch (err) {
+    admissionRuntimeLease?.release();
     // Plugin init failed: log visibly before re-throwing so the user
     // sees something actionable instead of a silent "loaded but empty".
     log('[plugin] FATAL: init failed', String(err));
@@ -948,6 +996,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         configPreset: runtime.preset,
         runtimePreset: runtimePresetName,
       });
+      // This is the source of truth for admission. It is intentionally
+      // captured only after every host/plugin merge and the final model
+      // inheritance, array-primary, preset, and orchestrator-model passes.
+      finalHostAgentConfig = configAgent;
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as
@@ -1088,6 +1140,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             : typeof info?.model?.modelID === 'string'
               ? info.model.modelID
               : undefined;
+        // Track each session's current model so background task admission
+        // can resolve the model a model-less subagent will inherit.
+        if (typeof info?.sessionID === 'string' && providerID && modelID) {
+          const model = `${providerID}/${modelID}`;
+          sessionMetadata.setModel(info.sessionID, model);
+          // Managed background-task sessions are identified by their session
+          // ID. If the model serving one changed (fallback re-prompt, runtime
+          // switch), migrate the admission accounting so provider/model caps
+          // keep tracking the model actually in use. No-op for other
+          // sessions and idempotent when the model is unchanged.
+          backgroundTaskConcurrency.migrateTask(info.sessionID, model);
+        }
         if (typeof info?.agent === 'string' && providerID && modelID) {
           const agentName = resolveRuntimeAgentName(runtime, info.agent);
           const model = `${providerID}/${modelID}`;
@@ -1217,6 +1281,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       await interviewManager.dispose();
       await multiplexerSessionManager.cleanupOnInstanceDisposed();
       clearTuiActivities();
+      // Release only this generation's ownership. The admission runtime
+      // defers final scheduler/tracker teardown by one macrotask so an
+      // immediate config-update re-init can retain active and queued calls.
+      admissionRuntimeLease?.release();
     },
 
     'tool.execute.before': async (input, output) => {
@@ -1334,6 +1402,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           agent,
           status: 'busy',
         });
+      }
+
+      // chat.message carries the model selected for this message, and it
+      // fires before the message.updated event that the event hook relies
+      // on. Recording it here closes the early window where a session-
+      // inheriting background task could be admitted before its parent's
+      // model is known — admission then resolves the correct provider/model
+      // cap immediately.
+      const messageModel = input.model ?? output?.message?.model;
+      if (
+        messageModel &&
+        typeof messageModel.providerID === 'string' &&
+        typeof messageModel.modelID === 'string'
+      ) {
+        const model = `${messageModel.providerID}/${messageModel.modelID}`;
+        sessionMetadata.setModel(input.sessionID, model);
+        backgroundTaskConcurrency.migrateTask(input.sessionID, model);
       }
       taskSessionManagerHook.observeChatMessage(input, output);
       orchestratorWakeScheduler.observeChatMessage(input, output);

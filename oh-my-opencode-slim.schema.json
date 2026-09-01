@@ -1156,6 +1156,52 @@
           "minimum": 1000,
           "maximum": 60000
         },
+        "concurrency": {
+          "default": {
+            "defaultConcurrency": 0,
+            "providerConcurrency": {},
+            "modelConcurrency": {}
+          },
+          "type": "object",
+          "properties": {
+            "defaultConcurrency": {
+              "default": 0,
+              "description": "Maximum concurrently running native background tasks. 0 means unlimited.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "providerConcurrency": {
+              "default": {},
+              "description": "Per-provider concurrency caps keyed by provider ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that provider.",
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
+            },
+            "modelConcurrency": {
+              "default": {},
+              "description": "Per-model concurrency caps keyed by provider/model ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that model.",
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         "waitForUserGuard": {
           "default": true,
           "description": "When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.",

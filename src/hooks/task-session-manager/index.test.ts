@@ -4,6 +4,7 @@ import { SessionLifecycle } from '../../hooks/session-lifecycle';
 import {
   BackgroundJobBoard,
   BackgroundJobSupervisor,
+  BackgroundTaskConcurrency,
   createInternalAgentTextPart,
   getBackgroundJobLifecycleLedger,
   SLIM_INTERNAL_INITIATOR_MARKER,
@@ -17,6 +18,10 @@ import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
   createTaskSessionManagerHook,
 } from './index';
+import {
+  createPendingCallTracker,
+  type PendingCallTracker,
+} from './pending-call-tracker';
 import { resetUserWaitGateForTests } from './user-wait-gate';
 
 // Route getClient back to _ctx.client so existing _ctx.client.session
@@ -114,6 +119,9 @@ type HookOptions = {
   willAttemptFallback?: (sessionID: string) => boolean;
   coordinator?: SessionLifecycle;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
+  backgroundTaskConcurrency?: BackgroundTaskConcurrency;
+  pendingCallTracker?: PendingCallTracker;
+  getModelForAgent?: (agentType: string) => string | undefined;
 };
 
 function createHook(options?: HookOptions) {
@@ -137,6 +145,9 @@ function createHook(options?: HookOptions) {
       readContextMaxFiles: options?.readContextMaxFiles,
       backgroundJobBoard: options?.backgroundJobBoard,
       backgroundJobSupervisor: options?.backgroundJobSupervisor,
+      backgroundTaskConcurrency: options?.backgroundTaskConcurrency,
+      pendingCallTracker: options?.pendingCallTracker,
+      getModelForAgent: options?.getModelForAgent,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
       isFallbackInProgress: options?.isFallbackInProgress,
@@ -234,6 +245,285 @@ describe('task-session-manager hook', () => {
   beforeEach(() => {
     // Process-global gate only — never reset inside createHook/production paths.
     resetUserWaitGateForTests();
+  });
+
+  test('queues background task admission until an earlier task releases its slot', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const { hook } = createHook({
+      backgroundTaskConcurrency: concurrency,
+      getModelForAgent: () => 'openai/fast',
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'first task',
+        },
+      },
+    );
+
+    const secondAdmission = hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      },
+    );
+    await Promise.resolve();
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 1 });
+
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { output: taskLaunchOutput('ses_first') },
+    );
+    concurrency.releaseTask('ses_first');
+    await secondAdmission;
+
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+  });
+
+  test('finishes a queued call after its manager generation is replaced', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const pendingCallTracker = createPendingCallTracker();
+    const firstGeneration = createHook({
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    await firstGeneration.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'first generation task',
+        },
+      },
+    );
+    await firstGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { output: taskLaunchOutput('child-1') },
+    );
+
+    const queuedCall = firstGeneration.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'handoff task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 1 });
+
+    await firstGeneration.hook.event({
+      event: { type: 'server.instance.disposed' },
+    });
+
+    const secondGeneration = createHook({
+      backgroundJobBoard: new BackgroundJobBoard(),
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+    concurrency.releaseTask('child-1');
+    await queuedCall;
+    await secondGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      { output: taskLaunchOutput('child-2') },
+    );
+
+    expect(secondGeneration.hook).toBeDefined();
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+    concurrency.releaseTask('child-2');
+  });
+
+  test('hands an early session.created registration to the next generation', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const pendingCallTracker = createPendingCallTracker();
+    const firstBoard = new BackgroundJobBoard();
+    // Force the source registration onto a different board-generation number
+    // than the fresh target board. The handoff must update the generation
+    // fence rather than rejecting the valid terminal result as stale.
+    firstBoard.registerLaunch({
+      taskID: 'child-early',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'stale prior run',
+    });
+    firstBoard.drop('child-early');
+    const firstGeneration = createHook({
+      backgroundJobBoard: firstBoard,
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    await firstGeneration.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-early' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'early handoff task',
+        },
+      },
+    );
+    await firstGeneration.hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-early',
+            parentID: 'parent-1',
+            agent: 'explorer',
+          },
+        },
+      },
+    });
+    expect(firstBoard.get('child-early')).toMatchObject({
+      state: 'running',
+      agent: 'explorer',
+    });
+
+    await firstGeneration.hook.event({
+      event: { type: 'server.instance.disposed' },
+    });
+
+    const secondBoard = new BackgroundJobBoard();
+    const secondGeneration = createHook({
+      backgroundJobBoard: secondBoard,
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    expect(firstBoard.get('child-early')).toBeUndefined();
+    expect(secondBoard.get('child-early')).toMatchObject({
+      state: 'running',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+
+    const terminalOutput = [
+      'task_id: child-early',
+      'state: completed',
+      '',
+      '<task_result>',
+      'completed after handoff',
+      '</task_result>',
+    ].join('\n');
+    // The disposed generation must not consume the transferred pending call
+    // or release its still-live admission ticket.
+    await firstGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-early' },
+      { output: terminalOutput },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+
+    await secondGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-early' },
+      { output: terminalOutput },
+    );
+
+    expect(secondBoard.get('child-early')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'completed after handoff',
+    });
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+  });
+
+  test('parent deletion cancels queued calls owned by the shared tracker', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const pendingCallTracker = createPendingCallTracker();
+    const { hook } = createHook({
+      coordinator,
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { args: { background: true, subagent_type: 'explorer' } },
+    );
+    const queuedCall = hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      { args: { background: true, subagent_type: 'fixer' } },
+    );
+
+    coordinator.dispatchSessionDeleted('parent-1');
+    await expect(queuedCall).rejects.toThrow(
+      'Background task concurrency queue was cancelled',
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+  });
+
+  test('exempts managed-task sessions from background admission (nested orchestration)', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    // A session that is itself a managed background task.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_child',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'nested orchestrator',
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundTaskConcurrency: concurrency,
+      getModelForAgent: () => 'openai/fast',
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'outer task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+
+    // The only slot is taken, so a non-exempt caller would queue here and
+    // never be admitted while the managed child stays blocked on itself.
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'ses_child', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'librarian',
+          description: 'nested task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
   });
 
   test('ignores messages without OpenCode info or parts', async () => {
@@ -6558,6 +6848,55 @@ describe('task-session-manager hook', () => {
     const job = board.get('child-b');
     expect(job).toBeDefined();
     expect(job?.state).toBe('running');
+  });
+
+  test('deleting a parent releases its children admission slots (recursive-delete ordering)', async () => {
+    // A recursive delete can arrive parent-first, and a child mid-fallback
+    // is skipped entirely, so the parent's cleanup must release every
+    // child's slot itself — otherwise capacity is leaked forever.
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'parent-1',
+      parentSessionID: 'grandparent',
+      agent: 'orchestrator',
+      description: 'parent orchestrator',
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'child one',
+    });
+    board.registerLaunch({
+      taskID: 'child-2',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'child two',
+    });
+
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 10,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    // Every task holds an admission slot, as if it were running.
+    concurrency.restoreTask('parent-1', 'openai/orch');
+    concurrency.restoreTask('child-1', 'openai/child1');
+    concurrency.restoreTask('child-2', 'openai/child2');
+    expect(concurrency.snapshot()).toEqual({ active: 3, queued: 0 });
+
+    createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      backgroundTaskConcurrency: concurrency,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => false,
+    });
+
+    coordinator.dispatchSessionDeleted('parent-1');
+
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
   });
 
   test('session.created early-registers board job so after-hook cancellation cannot orphan the child', async () => {
