@@ -539,6 +539,79 @@ describe('plugin config model inheritance', () => {
     } as never);
   }
 
+  async function assertAdmissionUsesFinalModel(
+    subagentType: string,
+    config: Record<string, unknown>,
+    hostAgent: Record<string, unknown>,
+  ): Promise<void> {
+    const hooks = await loadConfiguredPlugin(config);
+    try {
+      await hooks.config?.({ agent: hostAgent });
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'orchestrator-1',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'parent' },
+        } as never,
+        {} as never,
+      );
+      const first = hooks['tool.execute.before']?.(
+        {
+          tool: 'task',
+          sessionID: 'orchestrator-1',
+          callID: 'call-1',
+        } as never,
+        {
+          args: {
+            background: true,
+            subagent_type: subagentType,
+            description: 'first admission',
+          },
+        } as never,
+      );
+      const second = hooks['tool.execute.before']?.(
+        {
+          tool: 'task',
+          sessionID: 'orchestrator-1',
+          callID: 'call-2',
+        } as never,
+        {
+          args: {
+            background: true,
+            subagent_type: subagentType,
+            description: 'second admission',
+          },
+        } as never,
+      );
+
+      await first;
+      const queued = await Promise.race([
+        second?.then(
+          () => 'admitted',
+          () => 'rejected',
+        ),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve('still-queued'), 30),
+        ),
+      ]);
+      expect(queued).toBe('still-queued');
+
+      await hooks['tool.execute.after']?.(
+        {
+          tool: 'task',
+          sessionID: 'orchestrator-1',
+          callID: 'call-1',
+        } as never,
+        {
+          output: 'task_id: child-1\nstate: completed\nresult: done',
+        } as never,
+      );
+      await second;
+    } finally {
+      await hooks.dispose?.();
+    }
+  }
+
   test('session inheritance removes a stale host model in the final config', async () => {
     const hooks = await loadConfiguredPlugin({
       agents: {
@@ -622,6 +695,72 @@ describe('plugin config model inheritance', () => {
     } finally {
       await hooks.dispose?.();
     }
+  });
+
+  test('admission uses a direct host override from final agent config', async () => {
+    await assertAdmissionUsesFinalModel(
+      'fixer',
+      {
+        backgroundJobs: {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { host: 1 },
+          },
+        },
+        agents: { fixer: { model: 'plugin/fixer' } },
+      },
+      { fixer: { model: 'host/fixer' } },
+    );
+  });
+
+  test('admission uses a display-name host override before alias resolution', async () => {
+    await assertAdmissionUsesFinalModel(
+      'researcher',
+      {
+        backgroundJobs: {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { host: 1 },
+          },
+        },
+        agents: {
+          explorer: { model: 'plugin/explorer', displayName: 'researcher' },
+        },
+      },
+      { researcher: { model: 'host/researcher' } },
+    );
+  });
+
+  test('admission resolves a legacy agent alias to the final canonical entry', async () => {
+    await assertAdmissionUsesFinalModel(
+      'explore',
+      {
+        backgroundJobs: {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { host: 1 },
+          },
+        },
+        agents: { explorer: { model: 'plugin/explorer' } },
+      },
+      { explorer: { model: 'host/explorer' } },
+    );
+  });
+
+  test('ACP admission falls back to the parent only when its final config is model-less', async () => {
+    await assertAdmissionUsesFinalModel(
+      'external',
+      {
+        backgroundJobs: {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { openai: 1 },
+          },
+        },
+        acpAgents: { external: { command: 'bridge-acp' } },
+      },
+      { orchestrator: { model: 'openai/parent' } },
+    );
   });
 });
 

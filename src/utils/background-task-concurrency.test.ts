@@ -297,7 +297,8 @@ describe('BackgroundTaskConcurrency', () => {
         const a = schedulerA.acquire({ model: 'openai/fast' });
         await a.ready;
         a.bind('ses_a_first');
-        schedulerA.acquire({ model: 'openai/fast' });
+        const a2 = schedulerA.acquire({ model: 'openai/fast' });
+        void a2.ready.catch(() => {});
         await Promise.resolve();
         expect(schedulerA.snapshot()).toEqual({ active: 1, queued: 1 });
 
@@ -313,9 +314,12 @@ describe('BackgroundTaskConcurrency', () => {
         );
         const b2 = schedulerB.acquire({ model: 'openai/fast' });
         let b2Ready = false;
-        void b2.ready.then(() => {
-          b2Ready = true;
-        });
+        void b2.ready.then(
+          () => {
+            b2Ready = true;
+          },
+          () => {},
+        );
         await Promise.resolve();
         expect(b2Ready).toBe(false);
         expect(schedulerB.snapshot()).toEqual({ active: 1, queued: 1 });

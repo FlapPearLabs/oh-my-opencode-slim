@@ -134,6 +134,7 @@ export async function handleToolExecuteBefore(
     label,
     background,
     lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,
+    releaseLease: (lease) => deps.backgroundJobBoard.releaseLease(lease),
   };
   pendingCall.fullObjective = deriveFullObjective({
     description:
@@ -268,7 +269,11 @@ export async function handleToolExecuteAfter(
     directory: string;
     backgroundJobBoard: BackgroundJobStore;
     pendingCallTracker: {
-      take(callID?: string, sessionID?: string): PendingTaskCall | undefined;
+      take(
+        callID?: string,
+        sessionID?: string,
+        ownerBoard?: BackgroundJobStore,
+      ): PendingTaskCall | undefined;
       release?(call: PendingTaskCall): void;
     };
     taskContextTracker: {
@@ -314,6 +319,7 @@ export async function handleToolExecuteAfter(
   const pending = deps.pendingCallTracker.take(
     exactCallID,
     exactCallID ? undefined : input.sessionID,
+    deps.backgroundJobBoard,
   );
   const exactCallConfirmed =
     exactCallID !== undefined && pending?.callId === exactCallID;
@@ -473,7 +479,9 @@ function registerTaskOutputLaunch(
   if (resumed && pending.resumedTaskId !== taskID) return undefined;
 
   const existing = deps.backgroundJobBoard.get(taskID);
-  const earlyRegistrationGeneration = earlyRegistrationGenerations.get(pending);
+  const earlyRegistrationGeneration =
+    pending.earlyRegistration?.generation ??
+    earlyRegistrationGenerations.get(pending);
   if (
     pending.earlyRegisteredTaskID === taskID &&
     earlyRegistrationGeneration !== undefined &&

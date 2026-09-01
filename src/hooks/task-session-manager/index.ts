@@ -31,7 +31,10 @@ import { handleEvent } from './event-router';
 import { createIdleReconciler } from './idle-reconciliation';
 import { createIdleSessionTokens } from './idle-session-tokens';
 import { createInputWaitTracker } from './input-wait-tracker';
-import { createPendingCallTracker } from './pending-call-tracker';
+import {
+  createPendingCallTracker,
+  type PendingCallTracker,
+} from './pending-call-tracker';
 import type { RevivedRunTracker } from './revived-run-tracker';
 import { createRuntimeStatusReconciler } from './runtime-status-reconciliation';
 import { createTaskContextTracker } from './task-context-tracker';
@@ -169,6 +172,8 @@ export function createTaskSessionManagerHook(
     backgroundJobBoard?: BackgroundJobStore;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
+    /** Shared by plugin generations for one admission runtime. */
+    pendingCallTracker?: PendingCallTracker;
     getModelForAgent?: (
       agentType: string,
       parentSessionID?: string,
@@ -219,9 +224,11 @@ export function createTaskSessionManagerHook(
     }
   };
 
-  const pendingCallTracker = createPendingCallTracker({
-    releaseLease: (lease) => backgroundJobBoard.releaseLease(lease),
-  });
+  const pendingCallTracker =
+    options.pendingCallTracker ??
+    createPendingCallTracker({
+      releaseLease: (lease) => backgroundJobBoard.releaseLease(lease),
+    });
   const taskContextTracker = createTaskContextTracker();
 
   const terminalJobsInjectedByParent = new Map<string, InjectedTerminalJobs>();
@@ -355,6 +362,14 @@ export function createTaskSessionManagerHook(
     retainedBoardSnapshots: new Map(),
     retainedTailBoards: new Map(),
   };
+
+  // Early session.created registrations belong to the pending native call,
+  // not to the factory-local board that first observed them. Move them before
+  // this generation can receive the task after-hook.
+  pendingCallTracker.adoptEarlyRegistrations(
+    backgroundJobBoard,
+    options.backgroundJobSupervisor,
+  );
 
   return {
     markRevivedRunPending: (taskID: string): void => {

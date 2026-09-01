@@ -1,10 +1,14 @@
 import type { Plugin, ToolDefinition } from '@opencode-ai/plugin';
 import {
+  type AdmissionRuntimeLease,
+  acquireAdmissionRuntime,
+} from './admission-runtime';
+import {
   applyModelInheritanceToConfig,
   createAgents,
   getAgentConfigs,
   isSubagent,
-  resolveAgentConfigModel,
+  resolvePrimaryModelValue,
 } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
@@ -79,7 +83,6 @@ import {
   BackgroundJobSupervisor,
   type BackgroundTaskConcurrency,
   createDisplayNameMentionRewriter,
-  getBackgroundTaskConcurrency,
   resolveRuntimeAgentName,
 } from './utils';
 import type { ContextFile } from './utils/background-job-board';
@@ -255,6 +258,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let backgroundJobBoard: BackgroundJobBoard;
   let backgroundJobSupervisor: BackgroundJobSupervisor;
   let backgroundTaskConcurrency: BackgroundTaskConcurrency;
+  let admissionRuntimeLease: AdmissionRuntimeLease | undefined;
+  let finalHostAgentConfig: Record<string, unknown> | undefined;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let companionManager: CompanionManager;
   let taskCancelTools: ReturnType<typeof createCancelTaskTool>;
@@ -278,6 +283,21 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Counters for post-init health check (set inside try, checked outside)
   let toolCount = 0;
+
+  const resolvePrimaryModelFromFinalHostConfig = (
+    agentType: string,
+  ): string | undefined => {
+    const readModel = (entry: unknown): string | undefined => {
+      if (entry === null || typeof entry !== 'object') return undefined;
+      return resolvePrimaryModelValue((entry as Record<string, unknown>).model);
+    };
+
+    const directModel = readModel(finalHostAgentConfig?.[agentType]);
+    if (directModel) return directModel;
+
+    const resolvedName = resolveRuntimeAgentName(runtime, agentType);
+    return readModel(finalHostAgentConfig?.[resolvedName]);
+  };
 
   try {
     config = loadPluginConfig(ctx.directory);
@@ -369,10 +389,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMinLines: runtime.backgroundJobs.readContextMinLines,
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
     });
-    backgroundTaskConcurrency = getBackgroundTaskConcurrency(
+    admissionRuntimeLease = acquireAdmissionRuntime(
       ctx.directory,
       runtime.backgroundJobs.concurrency,
     );
+    backgroundTaskConcurrency = admissionRuntimeLease.backgroundTaskConcurrency;
 
     // Initialize coordinator as the sole writer to the board
     const backgroundJobCoordinator = new BackgroundJobCoordinator(
@@ -462,13 +483,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       backgroundJobBoard: backgroundJobCoordinator,
       backgroundJobSupervisor,
       backgroundTaskConcurrency,
+      pendingCallTracker: admissionRuntimeLease.pendingCallTracker,
       getModelForAgent: (agentType: string, parentSessionID?: string) =>
-        // The model the spawned subagent's config actually carries — the
-        // same resolution createAgents/final config use (explicit model,
-        // inheritModelFrom, fixer→librarian, preset primary). When the agent
-        // config ends up model-less (session inheritance), OpenCode serves
-        // the parent session's current model, tracked per session here.
-        resolveAgentConfigModel(runtime, agentType) ??
+        // Admission must use the config after the host has merged all of its
+        // agent layers. The direct lookup preserves display-name keys; the
+        // resolved lookup handles canonical names and legacy aliases. A
+        // parent model is only an inheritance fallback when neither final
+        // agent entry carries one.
+        resolvePrimaryModelFromFinalHostConfig(agentType) ??
         (parentSessionID
           ? sessionMetadata.getModel(parentSessionID)
           : undefined),
@@ -638,6 +660,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     toolCount = Object.keys(tools).length;
   } catch (err) {
+    admissionRuntimeLease?.release();
     // Plugin init failed: log visibly before re-throwing so the user
     // sees something actionable instead of a silent "loaded but empty".
     log('[plugin] FATAL: init failed', String(err));
@@ -969,6 +992,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         configPreset: runtime.preset,
         runtimePreset: runtimePresetName,
       });
+      // This is the source of truth for admission. It is intentionally
+      // captured only after every host/plugin merge and the final model
+      // inheritance, array-primary, preset, and orchestrator-model passes.
+      finalHostAgentConfig = configAgent;
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as
@@ -1239,12 +1266,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       await interviewManager.dispose();
       await multiplexerSessionManager.cleanupOnInstanceDisposed();
       clearTuiActivities();
-      // The concurrency scheduler is process-scoped and deliberately NOT
-      // disposed here: the plugin dispose hook also runs on re-inits
-      // (config update → Instance.dispose), and disposing it would drop the
-      // admission state (running slots + queued tickets) that must survive
-      // for the new plugin generation. Its per-task slots are released as
-      // tasks reach terminal states; the process reaps it on exit.
+      // Release only this generation's ownership. The admission runtime
+      // defers final scheduler/tracker teardown by one macrotask so an
+      // immediate config-update re-init can retain active and queued calls.
+      admissionRuntimeLease?.release();
     },
 
     'tool.execute.before': async (input, output) => {

@@ -54,12 +54,10 @@ export class BackgroundTaskConcurrencyQueueCancelledError extends Error {
  * reaches a terminal state. The job board still owns task lifecycle; this
  * scheduler only controls admission.
  *
- * State is scoped to the scheduler instance. The plugin factory can re-run
- * on config updates (see src/agents/index.ts), and the scheduler is created
- * once per project through `getBackgroundTaskConcurrency` so admission state
- * (running slots AND queued tickets) survives re-inits. `restoreTask` covers
- * the one case the shared instance cannot: a genuine process restart that
- * resumes a still-running task from persisted message history.
+ * State is scoped to the scheduler instance. Plugin generations share this
+ * scheduler through the per-directory lease in `src/admission-runtime.ts`.
+ * `restoreTask` covers the one case the shared instance cannot: a genuine
+ * process restart that resumes a still-running task from persisted history.
  */
 export class BackgroundTaskConcurrency {
   private readonly waiting: QueueEntry[] = [];
@@ -307,49 +305,10 @@ export class BackgroundTaskConcurrency {
   }
 }
 
-// ── Process-scoped shared instances ──────────────────────────────────────
-//
-// The plugin factory re-runs on every config update (Instance.dispose →
-// re-init). A scheduler created inside the factory would lose its running
-// slots AND its queued tickets on every re-init. These module-level instances
-// survive re-inits: the factory calls `getBackgroundTaskConcurrency` with the
-// (possibly changed) config, which reuses the instance for the same project.
-//
-// One instance per project directory: multiple plugin instances (different
-// OpenCode workspaces in one process) must not share a queue or overwrite
-// each other's caps. Only a genuine process restart resets them —
-// `restoreTask` (wired into historical run rehydration) then reclaims slots
-// for tasks still running.
-
-const schedulersByDirectory = new Map<string, BackgroundTaskConcurrency>();
-
-/**
- * Return the process-scoped scheduler for a project directory, applying
- * `config` when the instance already exists (plugin re-init). Instances are
- * isolated per directory so concurrent plugin instances never share admission
- * state. Recreates an instance after a dispose so a caller that tore the
- * scheduler down (tests, genuine unload) gets a fresh one instead of a
- * permanently cancelled instance.
- */
-export function getBackgroundTaskConcurrency(
-  directory: string,
-  config: BackgroundTaskConcurrencyConfig,
-): BackgroundTaskConcurrency {
-  const key = directory || 'default';
-  const existing = schedulersByDirectory.get(key);
-  if (!existing || existing.isDisposed()) {
-    const scheduler = new BackgroundTaskConcurrency(config);
-    schedulersByDirectory.set(key, scheduler);
-    return scheduler;
-  }
-  existing.updateConfig(config);
-  return existing;
-}
-
-/** Test seam: drop all shared instances between tests. */
-export function resetBackgroundTaskConcurrencyForTests(): void {
-  schedulersByDirectory.clear();
-}
+export {
+  getBackgroundTaskConcurrency,
+  resetBackgroundTaskConcurrencyForTests,
+} from '../admission-runtime';
 
 /** Resolve the single applicable cap tier for a model (model > provider > default). */
 function resolveTier(

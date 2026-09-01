@@ -48,18 +48,23 @@ const TASK_CONTROL_TOOL_NAMES = [
 ] as const;
 const SAFE_AGENT_ALIAS_RE = /^[a-z][a-z0-9_-]*$/i;
 
+export function resolvePrimaryModelValue(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const first = value[0];
+  return typeof first === 'string'
+    ? first
+    : first && typeof first === 'object' && 'id' in first
+      ? typeof first.id === 'string'
+        ? first.id
+        : undefined
+      : undefined;
+}
+
 function getPrimaryModelFromOverride(
   override: AgentOverrideConfig | undefined,
 ): string | undefined {
-  const model = override?.model;
-  if (typeof model === 'string') {
-    return model;
-  }
-  if (Array.isArray(model) && model.length > 0) {
-    const first = model[0];
-    return typeof first === 'string' ? first : first?.id;
-  }
-  return undefined;
+  return resolvePrimaryModelValue(override?.model);
 }
 
 /**
