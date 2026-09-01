@@ -5,17 +5,19 @@ import * as path from 'node:path';
 
 import type { PluginInput } from '@opencode-ai/plugin';
 
-import { createSearchPathGuardHook } from './index';
+import { createSearchPathGuardHook, resolveSearchPath } from './index';
 
 describe('search-path-guard hook', () => {
   let tempRoot: string;
 
   const createHook = (
     directory: string,
+    hostFlavor?: string,
   ): ReturnType<typeof createSearchPathGuardHook> =>
     createSearchPathGuardHook({
       client: {} as PluginInput['client'],
       directory,
+      hostFlavor,
     } as PluginInput);
 
   const runHook = (
@@ -125,16 +127,60 @@ describe('search-path-guard hook', () => {
     await runHook(hook, 'glob', { path: 'spaced dir ' });
   });
 
-  test('passes through when stat fails with a non-ENOENT error', async () => {
+  test('rejects an ENOTDIR path with an actionable error', async () => {
     const filePath = path.join(tempRoot, 'reg-file.txt');
     await writeFile(filePath, 'content');
 
     const hook = createHook(tempRoot);
 
     // A file used as a path component makes stat fail with ENOTDIR; the
-    // guard must not misreport that as a missing path.
-    await runHook(hook, 'grep', { path: 'reg-file.txt/child' });
-    await runHook(hook, 'glob', { path: 'reg-file.txt/child' });
+    // guard should explain the malformed path instead of passing an opaque
+    // ripgrep failure through to the caller.
+    await expect(
+      runHook(hook, 'grep', { path: 'reg-file.txt/child' }),
+    ).rejects.toThrow(/not a directory.*ENOTDIR/);
+    await expect(
+      runHook(hook, 'glob', { path: 'reg-file.txt/child' }),
+    ).rejects.toThrow(/not a directory.*ENOTDIR/);
+  });
+
+  test('uses the host grep and glob resolution rules separately', async () => {
+    const directory = path.relative(process.cwd(), tempRoot);
+    const raw = 'missing-search-path';
+    const hook = createHook(directory);
+
+    await expect(runHook(hook, 'grep', { path: raw })).rejects.toThrow(
+      path.join(directory, raw),
+    );
+    await expect(runHook(hook, 'glob', { path: raw })).rejects.toThrow(
+      path.resolve(directory, raw),
+    );
+  });
+
+  test('preserves native Windows drive-relative host semantics', async () => {
+    if (process.platform !== 'win32') return;
+
+    const raw = 'C:missing-search-path';
+    const hook = createHook(tempRoot);
+
+    await expect(runHook(hook, 'grep', { path: raw })).rejects.toThrow(
+      path.join(tempRoot, raw),
+    );
+    await expect(runHook(hook, 'glob', { path: raw })).rejects.toThrow(
+      path.resolve(tempRoot, raw),
+    );
+  });
+
+  test('v2 grep resolves drive-relative paths with win32 resolve semantics', () => {
+    const directory = 'D:\\workspace';
+    const raw = 'C:src';
+
+    expect(resolveSearchPath('grep', 'v2', directory, raw, path.win32)).toBe(
+      path.win32.resolve(directory, raw),
+    );
+    expect(
+      resolveSearchPath('grep', undefined, directory, raw, path.win32),
+    ).toBe(path.win32.join(directory, raw));
   });
 
   test('allows grep when the path points to an existing file', async () => {

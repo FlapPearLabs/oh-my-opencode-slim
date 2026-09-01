@@ -1209,16 +1209,20 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.before': async (input, output) => {
-      await toolLoopGuard['tool.execute.before'](
-        input as never,
-        output as never,
-      );
       await applyPatch['tool.execute.before'](input as never, output as never);
       await searchPathGuard['tool.execute.before'](
         input as never,
         output as never,
       );
       await taskSessionManagerHook['tool.execute.before'](
+        input as never,
+        output as never,
+      );
+      // Record a call only after all rejecting before-hooks have accepted it.
+      // In particular, search-path-guard can reject grep/glob before the host
+      // emits tool.execute.after; running the loop guard first would leave a
+      // pending call-key entry with no completion to consume it.
+      await toolLoopGuard['tool.execute.before'](
         input as never,
         output as never,
       );

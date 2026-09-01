@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
 import type { MultiplexerConfig } from './config';
 import pluginModuleDefault, {
   OhMyOpenCodeLite as plugin,
@@ -151,6 +152,59 @@ describe('plugin tool registration', () => {
         { sessionID: 'parent-after-reload', agent: 'orchestrator' } as never,
       ),
     ).resolves.toContain('state: waiting_for_user');
+  });
+
+  test('does not retain loop-guard state when search-path validation rejects', async () => {
+    const projectDir = await mkdtemp('/tmp/oh-my-opencode-slim-search-hook-');
+    const client = createPluginClient(async () => ({}));
+    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+
+    try {
+      hooks = await plugin({
+        client,
+        directory: projectDir,
+        worktree: projectDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+      } as never);
+
+      const rejectedPath = path.join(projectDir, 'created-after-rejection');
+      await expect(
+        hooks['tool.execute.before']?.(
+          { tool: 'glob', sessionID: 'search-loop', callID: 'rejected' },
+          { args: { path: rejectedPath } },
+        ),
+      ).rejects.toThrow(/Search path does not exist/);
+
+      // A host should not emit `after` after a rejected `before`, but this
+      // simulates that stray completion to ensure it cannot poison tracking.
+      await mkdir(rejectedPath);
+      await hooks['tool.execute.after']?.(
+        { tool: 'glob', sessionID: 'search-loop', callID: 'rejected' },
+        { output: 'same', metadata: {} },
+      );
+
+      for (let i = 0; i < 4; i++) {
+        const callID = `valid-${i}`;
+        await hooks['tool.execute.before']?.(
+          { tool: 'glob', sessionID: 'search-loop', callID },
+          { args: { path: rejectedPath } },
+        );
+        await hooks['tool.execute.after']?.(
+          { tool: 'glob', sessionID: 'search-loop', callID },
+          { output: 'same', metadata: {} },
+        );
+      }
+
+      await expect(
+        hooks['tool.execute.before']?.(
+          { tool: 'glob', sessionID: 'search-loop', callID: 'valid-4' },
+          { args: { path: rejectedPath } },
+        ),
+      ).resolves.toBeUndefined();
+    } finally {
+      await hooks?.dispose?.();
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   test('exposes an idempotent top-level dispose finalizer', async () => {

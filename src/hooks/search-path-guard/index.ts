@@ -16,7 +16,34 @@ interface ToolExecuteBeforeOutput {
   };
 }
 
+type PathOperations = Pick<typeof path, 'isAbsolute' | 'join' | 'resolve'>;
+
+/**
+ * Resolve a search path the same way as the corresponding host tool.
+ *
+ * v1's grep uses path.join while v1's glob uses path.resolve. The v2 tool
+ * adapter uses path.resolve for both tools. `pathOperations` is injectable so
+ * path flavor behavior can be tested deterministically without a Windows CI
+ * runner; production uses Node's native path flavor, as does the host.
+ */
+export function resolveSearchPath(
+  tool: string,
+  hostFlavor: string | undefined,
+  directory: string | undefined,
+  raw: string,
+  pathOperations: PathOperations = path,
+): string | null {
+  if (!directory) return null;
+  if (pathOperations.isAbsolute(raw)) return raw;
+  if (hostFlavor === 'v2' || tool === 'glob') {
+    return pathOperations.resolve(directory, raw);
+  }
+  return pathOperations.join(directory, raw);
+}
+
 export function createSearchPathGuardHook(ctx: PluginInput) {
+  const hostFlavor = (ctx as PluginInput & { hostFlavor?: string }).hostFlavor;
+
   return {
     'tool.execute.before': async (
       input: ToolExecuteBeforeInput,
@@ -42,14 +69,16 @@ export function createSearchPathGuardHook(ctx: PluginInput) {
         return;
       }
 
-      // Mirror the host's resolution rule exactly: absolute paths pass
-      // through, relative paths resolve against the instance directory.
+      // Mirror each host tool's resolution rule exactly. grep uses join while
+      // glob uses resolve; that distinction matters for relative paths on
+      // Windows, including drive-relative paths such as `C:src`.
       // Without a resolution base, never block (conservative fallback).
-      const resolved = path.isAbsolute(raw)
-        ? raw
-        : ctx.directory
-          ? path.join(ctx.directory, raw)
-          : null;
+      const resolved = resolveSearchPath(
+        input.tool,
+        hostFlavor,
+        ctx.directory,
+        raw,
+      );
       if (resolved === null) {
         return;
       }
@@ -63,9 +92,22 @@ export function createSearchPathGuardHook(ctx: PluginInput) {
           // Genuine missing path (broken symlinks included, matching the
           // pending upstream fix). Report it as such.
           missing = true;
+        } else if (code === 'ENOTDIR') {
+          log('search-path-guard blocked invalid path', {
+            tool: input.tool,
+            path: raw,
+            resolved,
+            code,
+          });
+          throw new Error(
+            `Search path is invalid: ${resolved} (from "${raw}"). ` +
+              `A path component is not a directory (ENOTDIR), so the ${input.tool} ` +
+              'search was blocked before ripgrep ran. Verify the target path ' +
+              'and that every parent component is a directory.',
+          );
         } else {
-          // Any other stat failure (permissions, I/O, ENOTDIR) keeps its
-          // original meaning: pass through and never misdiagnose.
+          // Any other stat failure (permissions or I/O) keeps its original
+          // meaning: pass through and never misdiagnose.
           log('search-path-guard passed on stat error', {
             tool: input.tool,
             path: raw,
