@@ -31,6 +31,7 @@ import {
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
   createReflectCommandHook,
+  createSearchPathGuardHook,
   createTaskSessionManagerHook,
   createToolLoopGuardHook,
   ForegroundFallbackManager,
@@ -244,6 +245,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let filterAvailableSkills: ReturnType<typeof createFilterAvailableSkillsHook>;
   let postFileToolNudge: ReturnType<typeof createPostFileToolNudgeHook>;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
+  let searchPathGuard: ReturnType<typeof createSearchPathGuardHook>;
   let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
   let toolLoopGuard: ToolLoopGuardHook;
   let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
@@ -527,6 +529,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
 
     applyPatch = createApplyPatchHook(ctx);
+
+    searchPathGuard = createSearchPathGuardHook(ctx);
 
     jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
     toolLoopGuard = createToolLoopGuardHook();
@@ -1205,12 +1209,20 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.before': async (input, output) => {
-      await toolLoopGuard['tool.execute.before'](
+      await applyPatch['tool.execute.before'](input as never, output as never);
+      await searchPathGuard['tool.execute.before'](
         input as never,
         output as never,
       );
-      await applyPatch['tool.execute.before'](input as never, output as never);
       await taskSessionManagerHook['tool.execute.before'](
+        input as never,
+        output as never,
+      );
+      // Record a call only after all rejecting before-hooks have accepted it.
+      // In particular, search-path-guard can reject grep/glob before the host
+      // emits tool.execute.after; running the loop guard first would leave a
+      // pending call-key entry with no completion to consume it.
+      await toolLoopGuard['tool.execute.before'](
         input as never,
         output as never,
       );
