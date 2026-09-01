@@ -1578,6 +1578,303 @@ describe('ForegroundFallbackManager session.status', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager chain exhaustion', () => {
+  test('re-walks from the second chain entry on each new user turn', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    const sessionID = 'sess-turns';
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+        },
+      },
+    });
+
+    const realNowFn = Date.now;
+    let fakeNow = realNowFn();
+    Date.now = () => fakeNow;
+    try {
+      fakeNow += 6_000;
+      await mgr.handleEvent({
+        type: 'session.error',
+        properties: { sessionID, error: { message: 'rate limit exceeded' } },
+      });
+      expect(mocks.promptAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            model: { providerID: 'openai', modelID: 'gpt-4o' },
+          }),
+        }),
+      );
+
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            sessionID,
+            agent: 'orchestrator',
+            role: 'assistant',
+            providerID: 'openai',
+            modelID: 'gpt-4o',
+            time: { created: 1, completed: 2 },
+          },
+        },
+      });
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            sessionID,
+            agent: 'orchestrator',
+            role: 'assistant',
+            providerID: 'anthropic',
+            modelID: 'claude-opus-4-5',
+          },
+        },
+      });
+
+      fakeNow += 6_000;
+      await mgr.handleEvent({
+        type: 'session.error',
+        properties: { sessionID, error: { message: 'rate limit exceeded' } },
+      });
+
+      expect(mocks.promptAsync.mock.calls[1]?.[0]).toEqual(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            model: { providerID: 'openai', modelID: 'gpt-4o' },
+          }),
+        }),
+      );
+    } finally {
+      Date.now = realNowFn;
+    }
+  });
+
+  test('recovers fallback after a chain-exhaustion abort when a new turn returns to the primary', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
+      true,
+      { directory: '/test' } as any,
+    );
+    const sessionID = 'sess-recover-after-abort';
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          agent: 'orchestrator',
+          providerID: 'openai',
+          modelID: 'gpt-b',
+          role: 'assistant',
+        },
+      },
+    });
+
+    const realNowFn = Date.now;
+    let fakeNow = realNowFn();
+    Date.now = () => fakeNow;
+    try {
+      const fail = async () => {
+        fakeNow += 6_000;
+        await mgr.handleEvent({
+          type: 'session.error',
+          properties: {
+            sessionID,
+            error: { message: 'rate limit exceeded' },
+          },
+        });
+      };
+
+      await fail();
+      await fail();
+      await fail();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+      expect(mocks.abort).toHaveBeenCalledTimes(1);
+
+      // Deliberately omit time.completed: this is not a successful response;
+      // recovery must come from the fresh descent reset instead.
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            sessionID,
+            agent: 'orchestrator',
+            providerID: 'openai',
+            modelID: 'gpt-b',
+            role: 'assistant',
+          },
+        },
+      });
+
+      await fail();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(3);
+      expect(mocks.promptAsync.mock.calls[2]?.[0]).toEqual(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            model: { providerID: 'openai', modelID: 'gpt-c' },
+          }),
+        }),
+      );
+      expect(mgr.willAttemptFallback(sessionID)).toBe(true);
+    } finally {
+      Date.now = realNowFn;
+    }
+  });
+
+  test('does not fall back onto an earlier chain entry', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    const sessionID = 'sess-mid-chain';
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          agent: 'orchestrator',
+          providerID: 'openai',
+          modelID: 'gpt-4o',
+          role: 'assistant',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: { sessionID, error: { message: 'rate limit exceeded' } },
+    });
+
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'google', modelID: 'gemini-2.5-pro' },
+        }),
+      }),
+    );
+    expect(mocks.promptAsync.mock.calls[0]?.[0].body.model).not.toEqual({
+      providerID: 'anthropic',
+      modelID: 'claude-opus-4-5',
+    });
+  });
+
+  test('does not fall back onto the primary when the current model is off-chain', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    const sessionID = 'sess-off-chain';
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+        },
+      },
+    });
+
+    const realNowFn = Date.now;
+    let fakeNow = realNowFn();
+    Date.now = () => fakeNow;
+    try {
+      fakeNow += 6_000;
+      await mgr.handleEvent({
+        type: 'session.error',
+        properties: { sessionID, error: { message: 'rate limit exceeded' } },
+      });
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            sessionID,
+            agent: 'orchestrator',
+            providerID: 'openai',
+            modelID: 'gpt-4o-mini',
+            role: 'assistant',
+          },
+        },
+      });
+
+      fakeNow += 6_000;
+      await mgr.handleEvent({
+        type: 'session.error',
+        properties: { sessionID, error: { message: 'rate limit exceeded' } },
+      });
+
+      expect(mocks.promptAsync.mock.calls[1]?.[0]).toEqual(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            model: { providerID: 'google', modelID: 'gemini-2.5-pro' },
+          }),
+        }),
+      );
+      expect(mocks.promptAsync.mock.calls[1]?.[0].body.model).not.toEqual({
+        providerID: 'anthropic',
+        modelID: 'claude-opus-4-5',
+      });
+    } finally {
+      Date.now = realNowFn;
+    }
+  });
+
+  test('does not reset the descent when the current model was inferred, not observed', async () => {
+    createMockClient({ messagesData: [] });
+    const mgr = new ForegroundFallbackManager(
+      { orchestrator: ['a/1', 'b/2', 'c/3'] },
+      true,
+      { directory: '/test' } as any,
+    );
+    const sessionID = 'sess-inferred-model';
+
+    await mgr.handleEvent({
+      type: 'subagent.session.created',
+      properties: { sessionID, agentName: 'orchestrator' },
+    });
+
+    const realNowFn = Date.now;
+    let fakeNow = realNowFn();
+    Date.now = () => fakeNow;
+    try {
+      const fail = async () => {
+        fakeNow += 6_000;
+        await mgr.handleEvent({
+          type: 'session.error',
+          properties: {
+            sessionID,
+            error: { message: 'rate limit exceeded' },
+          },
+        });
+      };
+
+      await fail();
+      await fail();
+
+      expect([...(mgr as any).sessionTried.get(sessionID)]).toEqual([
+        'a/1',
+        'b/2',
+        'c/3',
+      ]);
+    } finally {
+      Date.now = realNowFn;
+    }
+  });
+
   test('does not call promptAsync when the only chain model is already the current model', async () => {
     // Scenario: chain = ['openai/gpt-b'], current model IS 'openai/gpt-b'.
     // tryFallback adds 'openai/gpt-b' to tried → chain.find() returns undefined → exhausted.
@@ -1853,6 +2150,8 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
     }
   });
 
+  // Protects the tried.size > 1 invariant in execFallback: a single-model
+  // chain must not re-abort repeatedly after exhaustion.
   test('does not abort repeatedly for single-model chains after exhaustion', async () => {
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
