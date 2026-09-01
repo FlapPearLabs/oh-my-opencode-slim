@@ -33,6 +33,7 @@ export {
 } from './orchestrator-wake';
 export { createPhaseReminderHook } from './phase-reminder';
 export { createPostFileToolNudgeHook } from './post-file-tool-nudge';
+export { createProfileCommandsHook } from './profile-commands';
 export { createReflectCommandHook } from './reflect';
 export { SessionLifecycle } from './session-lifecycle';
 export { createTaskSessionManagerHook } from './task-session-manager';

@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_SESSION_METADATA_ENTRIES,
   TOAST_DURATION_MS,
 } from './config/constants';
+import { PROFILE_MAPPINGS, readProfile } from './config/profile';
 import { RuntimeConfig } from './config/runtime';
 import { applyOrchestratorModelConfig } from './config/strip-orchestrator-model';
 import { HEALTH_CHECK, minimumExpectedToolCount } from './health-check';
@@ -30,6 +31,7 @@ import {
   createOrchestratorWakeScheduler,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
+  createProfileCommandsHook,
   createReflectCommandHook,
   createTaskSessionManagerHook,
   createToolLoopGuardHook,
@@ -233,6 +235,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   let chatHeadersHook: ReturnType<typeof createChatHeadersHook>;
   let foregroundFallback: ForegroundFallbackManager;
+  let profileCommandsHook: ReturnType<typeof createProfileCommandsHook>;
   let deepworkCommandHook: ReturnType<typeof createDeepworkCommandHook>;
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
   let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
@@ -436,6 +439,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       sessionLifecycle,
     );
 
+    profileCommandsHook = createProfileCommandsHook();
     deepworkCommandHook = createDeepworkCommandHook();
     reflectCommandHook = createReflectCommandHook();
     loopCommandHook = createLoopCommandHook();
@@ -893,6 +897,34 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
+      // ------ PROFILE SWITCH FEATURE ------
+      const activeProfile = readProfile();
+      const profileMapping = PROFILE_MAPPINGS[activeProfile];
+      if (profileMapping) {
+        for (const [agentName, profileModel] of Object.entries(
+          profileMapping,
+        )) {
+          const resolvedName = AGENT_ALIASES[agentName] ?? agentName;
+          const entry = configAgent[resolvedName] as
+            | Record<string, unknown>
+            | undefined;
+          if (entry) {
+            entry.model = profileModel.model;
+            if (profileModel.variant) {
+              entry.variant = profileModel.variant;
+            } else {
+              delete entry.variant;
+            }
+            log('[plugin] applied profile override', {
+              profile: activeProfile,
+              agent: resolvedName,
+              model: entry.model as string,
+            });
+          }
+        }
+      }
+      // ------------------------------------
+
       // Capture the resolved model state before optionally removing the
       // orchestrator model from the SDK config, so the TUI keeps showing the
       // configured model rather than a fallback or "default".
@@ -1000,6 +1032,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       interviewManager.registerCommand(opencodeConfig);
+      profileCommandsHook.registerCommand(opencodeConfig);
       deepworkCommandHook.registerCommand(opencodeConfig);
       reflectCommandHook.registerCommand(opencodeConfig);
       loopCommandHook.registerCommand(opencodeConfig);
@@ -1217,6 +1250,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'command.execute.before': async (input, output) => {
+      await profileCommandsHook.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
+      );
+
       await interviewManager.handleCommandExecuteBefore(
         input as {
           command: string;

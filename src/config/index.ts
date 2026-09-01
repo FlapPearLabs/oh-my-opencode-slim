@@ -5,6 +5,7 @@ export {
   loadAgentPrompt,
   loadPluginConfig,
 } from './loader';
+export * from './profile';
 export * from './schema';
 export {
   getAcpAgentNames,
