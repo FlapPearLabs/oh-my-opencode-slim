@@ -46,7 +46,7 @@ export function createHashlineEditTool(options: HashlineEditToolOptions): ToolDe
         const patcher = new Patcher({
           fs,
           snapshots,
-          enforceSeenLines: false,
+          enforceSeenLines: true,
         });
 
         const patch = Patch.parse(patchText, { cwd: root });
@@ -58,7 +58,11 @@ export function createHashlineEditTool(options: HashlineEditToolOptions): ToolDe
 
         log('hashline_edit applied', { summary, sections: result.sections.length });
         return `Successfully applied hashline edit:\n${summary}`;
-      } catch (err: unknown) {
+      } catch (err: any) {
+        if (err?.code === 'MODULE_NOT_FOUND' || err?.message?.includes('Cannot find module')) {
+          throw new Error('The @oh-my-pi/hashline optional dependency is required to use this tool. Please install it.');
+        }
+
         const message = err instanceof Error ? err.message : String(err);
         const isMismatch =
           (err && typeof err === 'object' && 'name' in err && (err as { name: string }).name === 'MismatchError') ||

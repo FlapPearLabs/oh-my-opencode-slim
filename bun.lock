@@ -7,7 +7,6 @@
       "dependencies": {
         "@ast-grep/cli": "^0.44.1",
         "@mozilla/readability": "^0.6.0",
-        "@oh-my-pi/hashline": "^18.1.2",
         "@opencode-ai/plugin": "1.18.23",
         "@opencode-ai/sdk": "1.18.23",
         "jsdom": "^29.0.0",
@@ -16,6 +15,7 @@
       },
       "devDependencies": {
         "@biomejs/biome": "2.5.4",
+        "@oh-my-pi/hashline": "^18.1.2",
         "@types/jsdom": "28",
         "@types/node": "^26.1.1",
         "@types/turndown": "^5.0.6",
@@ -30,8 +30,12 @@
         "solid-js": "1.9.12",
       },
       "peerDependencies": {
+        "@oh-my-pi/hashline": "18.1.2",
         "zod": "^4.0.0",
       },
+      "optionalPeers": [
+        "@oh-my-pi/hashline",
+      ],
     },
   },
   "trustedDependencies": [
