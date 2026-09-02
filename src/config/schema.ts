@@ -471,6 +471,16 @@ export const PluginConfigSchema = z
     companion: CompanionConfigSchema.optional(),
     webfetch: WebfetchConfigSchema.optional(),
     acpAgents: AcpAgentsConfigSchema.optional(),
+    hashline_edit: z
+      .boolean()
+      .optional()
+      .describe(
+        'When true, enable hash-anchored editing via @oh-my-pi/hashline. ' +
+          'Annotates read tool output with content-hash line anchors and ' +
+          'validates those anchors before applying edits, rejecting stale ' +
+          'patches that would corrupt concurrent work. Disabled by default. ' +
+          'See docs/hashline.md for usage.',
+      ),
   })
   .superRefine((value, ctx) => {
     if (value.agents) {

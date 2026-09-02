@@ -87,6 +87,7 @@
   "dependencies": {
     "@ast-grep/cli": "^0.44.1",
     "@mozilla/readability": "^0.6.0",
+    "@oh-my-pi/hashline": "^18.1.2",
     "@opencode-ai/plugin": "1.18.23",
     "@opencode-ai/sdk": "1.18.23",
     "jsdom": "^29.0.0",

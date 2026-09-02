@@ -26,6 +26,7 @@ import {
   createChatHeadersHook,
   createDeepworkCommandHook,
   createFilterAvailableSkillsHook,
+  createHashlineHook,
   createJsonErrorRecoveryHook,
   createLoopCommandHook,
   createOrchestratorWakeScheduler,
@@ -35,6 +36,7 @@ import {
   createReflectCommandHook,
   createTaskSessionManagerHook,
   createToolLoopGuardHook,
+  createUltraworkCommandHook,
   ForegroundFallbackManager,
   SessionLifecycle,
 } from './hooks';
@@ -239,6 +241,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let deepworkCommandHook: ReturnType<typeof createDeepworkCommandHook>;
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
   let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
+  let ultraworkCommandHook: ReturnType<typeof createUltraworkCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
   let orchestratorWakeScheduler: ReturnType<
     typeof createOrchestratorWakeScheduler
@@ -247,9 +250,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let filterAvailableSkills: ReturnType<typeof createFilterAvailableSkillsHook>;
   let postFileToolNudge: ReturnType<typeof createPostFileToolNudgeHook>;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
+  let hashlineHook: ReturnType<typeof createHashlineHook>;
   let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
   let toolLoopGuard: ToolLoopGuardHook;
   let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
+  let hashlineAfter: (i: unknown, o: unknown) => Promise<void>;
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
@@ -443,6 +448,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     deepworkCommandHook = createDeepworkCommandHook();
     reflectCommandHook = createReflectCommandHook();
     loopCommandHook = createLoopCommandHook();
+    ultraworkCommandHook = createUltraworkCommandHook();
     taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
       strategy: runtime.backgroundJobs.strategy,
       maxSessionsPerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
@@ -531,6 +537,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
 
     applyPatch = createApplyPatchHook(ctx);
+    hashlineHook = createHashlineHook({
+      enabled: runtime.hashline_edit === true,
+      root: ctx.directory ?? process.cwd(),
+    });
 
     jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
     toolLoopGuard = createToolLoopGuardHook();
@@ -538,6 +548,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Pre-created wrapped handlers for tool.execute.after (error-isolated)
     postFileToolNudgeAfter = wrapPostToolHook('post-file-tool-nudge', (i, o) =>
       postFileToolNudge['tool.execute.after'](i as never, o as never),
+    );
+    hashlineAfter = wrapPostToolHook('hashline-edit', (i, o) =>
+      hashlineHook.toolExecuteAfter(i as never, o as never),
     );
     jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
       jsonErrorRecovery['tool.execute.after'](i as never, o as never),
@@ -1031,6 +1044,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       deepworkCommandHook.registerCommand(opencodeConfig);
       reflectCommandHook.registerCommand(opencodeConfig);
       loopCommandHook.registerCommand(opencodeConfig);
+      ultraworkCommandHook.registerCommand(opencodeConfig);
     },
 
     event: async (input) => {
@@ -1237,6 +1251,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         output as never,
       );
+      await hashlineHook.toolExecuteBefore(input as never, output as never);
       await applyPatch['tool.execute.before'](input as never, output as never);
       await taskSessionManagerHook['tool.execute.before'](
         input as never,
@@ -1282,6 +1297,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
 
       await loopCommandHook.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
+      );
+
+      await ultraworkCommandHook.handleCommandExecuteBefore(
         input as {
           command: string;
           sessionID: string;
@@ -1479,6 +1503,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.after': async (input, output) => {
+      await hashlineAfter(input, output);
       await postFileToolNudgeAfter(input, output);
       await jsonErrorRecoveryAfter(input, output);
       await toolLoopGuard['tool.execute.after'](

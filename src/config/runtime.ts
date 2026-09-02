@@ -370,6 +370,10 @@ export class RuntimeConfig {
     return this.pluginConfig?.compactSidebar ?? true;
   }
 
+  get hashline_edit(): boolean {
+    return this.pluginConfig?.hashline_edit === true;
+  }
+
   /**
    * Agent name → model array (id + optional variant), derived once from
    * array-configured models. Was modelArrayMap in src/index.ts (built from

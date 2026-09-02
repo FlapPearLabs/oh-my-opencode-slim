@@ -19,6 +19,11 @@ export { createChatHeadersHook } from './chat-headers';
 export { createDeepworkCommandHook } from './deepwork';
 export { createFilterAvailableSkillsHook } from './filter-available-skills';
 export {
+  createHashlineHook,
+  type HashlineHookOptions,
+} from './hashline';
+export { createUltraworkCommandHook } from './ultrawork-command';
+export {
   ForegroundFallbackManager,
   isFailoverError,
   isRetryableError,

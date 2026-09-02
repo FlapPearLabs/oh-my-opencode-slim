@@ -1,16 +1,12 @@
 # Hashline (content-hash line anchors for LLM edits)
 
-This project does not implement hashline / content-hash line anchoring for LLM edits.
+**UPDATE (2026-09-02):** The Slim Unattended Reliability Program mission explicitly superseded this `wontfix` decision. Hashline is now implemented as an optional layer (`hashline_edit: true` in config) backed by the upstream `@oh-my-pi/hashline` library.
 
-## Why this is out of scope
+The original rationale is preserved below for historical context.
 
-Hashline is a technique where each line returned by the `read` tool is prefixed
-with a short content-hash anchor (e.g. `9#KT:  console.log(...)`), and the LLM
-references edits by `LINE#HASH` anchor instead of quoting raw text. The system
-validates the hash before applying an edit, so if the file changed between read
-and edit the hash mismatches and the edit is rejected before it can corrupt
-anything. Hashes are context-based (`xxh32(prev + curr + next)` over a 16-char
-alphabet), so editing line N only invalidates N-1/N/N+1.
+## Why this was originally out of scope
+
+Hashline is a technique where each file read is tagged with a content-hash anchor, and edits must reference that tag to validate they are not acting on stale content.
 
 Implementing it requires wrapping OpenCode's core `read` and `edit` tools to
 inject and validate anchors and track file snapshots for stale-anchor recovery.
@@ -25,4 +21,4 @@ outside this project's scope.
 
 ## Prior requests
 
-- #141 — "Discussion about hashline" (feature proposal / discussion; closed as wontfix)
+- #141 — "Discussion about hashline" (feature proposal / discussion; closed as wontfix, reversed in Unattended Reliability Program)
