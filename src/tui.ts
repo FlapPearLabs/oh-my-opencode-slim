@@ -283,11 +283,19 @@ function compactAgentRow(
       justifyContent: 'space-between',
     },
     [
-      box({ width: 16, flexDirection: 'row' }, [
+      box({ width: 16, flexShrink: 0, flexDirection: 'row' }, [
         text({ fg: theme.textMuted, width: 14 }, [label]),
         activityIndicator(active, now, theme),
       ]),
-      text({ fg: theme.textMuted }, [modelName]),
+      text(
+        {
+          fg: theme.textMuted,
+          wrapMode: 'none',
+          truncate: true,
+          flexShrink: 1,
+        },
+        [modelName],
+      ),
     ],
   );
 }
