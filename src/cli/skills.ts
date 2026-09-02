@@ -58,10 +58,6 @@ export function getSkillPermissionsForAgent(
         permissions[name] = 'allow';
       }
     }
-    for (const name of disabledSkills) {
-      permissions[name] = 'deny';
-    }
-    return permissions;
   }
 
   // Apply permissions from bundled custom skills
@@ -69,7 +65,7 @@ export function getSkillPermissionsForAgent(
     const isAllowed =
       skill.allowedAgents.includes('*') ||
       skill.allowedAgents.includes(agentName);
-    if (isAllowed && !disabledSkills.has(skill.name)) {
+    if (isAllowed && permissions[skill.name] !== 'deny' && !disabledSkills.has(skill.name)) {
       permissions[skill.name] = 'allow';
     }
   }
@@ -79,7 +75,7 @@ export function getSkillPermissionsForAgent(
     const isAllowed =
       skill.allowedAgents.includes('*') ||
       skill.allowedAgents.includes(agentName);
-    if (isAllowed && !disabledSkills.has(skill.name)) {
+    if (isAllowed && permissions[skill.name] !== 'deny' && !disabledSkills.has(skill.name)) {
       permissions[skill.name] = 'allow';
     }
   }

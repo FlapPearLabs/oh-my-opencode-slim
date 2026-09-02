@@ -342,4 +342,34 @@ describe('createFilterAvailableSkillsHook', () => {
     expect(output.messages[0].parts[0].text).toContain('<name>deepwork</name>');
     expect(output.messages[0].parts[0].text).toContain('<name>ultrawork</name>');
   });
+
+  test('orchestrator retains ultrawork skill even when skills list is provided but does not exclude it', async () => {
+    const config: PluginConfig = {
+      agents: {
+        orchestrator: {
+          skills: ['skill1'],
+        },
+      },
+    };
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor(config));
+    const output = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [
+            { type: 'text', text: availableSkillsBlock('skill1', 'ultrawork', 'skill3') },
+          ],
+        },
+        {
+          info: { role: 'user', agent: 'orchestrator' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+    await hook['experimental.chat.messages.transform']({}, output);
+    const resultText = output.messages[0].parts[0].text;
+    expect(resultText).toContain('<name>skill1</name>');
+    expect(resultText).toContain('<name>ultrawork</name>');
+    expect(resultText).not.toContain('<name>skill3</name>');
+  });
 });
