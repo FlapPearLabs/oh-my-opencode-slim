@@ -1,255 +1,186 @@
 /**
- * Tests for the hashline hook integration.
- *
- * Tests use InMemoryFilesystem and InMemorySnapshotStore from @oh-my-pi/hashline
- * directly so they remain deterministic and filesystem-free.
+ * Real integration tests for Hashline P0 integration.
+ * Tests actual OpenCode hook contracts, dedicated hashline_edit tool,
+ * stale anchor rejection, disabled fallback, path safety, and native tool independence.
  */
 
-import { describe, expect, it, beforeEach } from 'bun:test';
+import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import {
-  computeFileHash,
-  formatHashlineHeader,
-  InMemoryFilesystem,
-  InMemorySnapshotStore,
-  Patch,
-  Patcher,
-} from '@oh-my-pi/hashline';
+  createHashlineReadHook,
+  createHashlineEditTool,
+  createNodeFsFilesystem,
+  getGlobalSnapshotStore,
+  resetGlobalSnapshotStore,
+} from '.';
 
-// ── Unit-level hashline format tests ──────────────────────────────────────
+describe('hashline P0 integration', () => {
+  let tempDir: string;
 
-describe('hashline format primitives', () => {
-  it('computeFileHash returns a 4-hex uppercase string', () => {
-    const hash = computeFileHash('hello\nworld\n');
-    expect(hash).toMatch(/^[0-9A-F]{4}$/);
+  beforeEach(async () => {
+    resetGlobalSnapshotStore();
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hashline-test-'));
   });
 
-  it('formatHashlineHeader renders [path#TAG]', () => {
-    const header = formatHashlineHeader('src/foo.ts', 'ABCD');
-    expect(header).toBe('[src/foo.ts#ABCD]');
+  afterEach(async () => {
+    resetGlobalSnapshotStore();
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it('same content mints same tag (idempotent)', () => {
-    const store = new InMemorySnapshotStore();
-    const text = 'const x = 1;\nconst y = 2;\n';
-    const tag1 = store.record('a.ts', text);
-    const tag2 = store.record('a.ts', text);
-    expect(tag1).toBe(tag2);
+  it('1. real read after-hook payload -> annotates output with [path#TAG] and LINE:CONTENT', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const filePath = path.join(tempDir, 'sample.ts');
+    const content = 'const a = 1;\nconst b = 2;\n';
+    await fs.writeFile(filePath, content, 'utf8');
+
+    const input = {
+      tool: 'read',
+      args: { path: 'sample.ts' },
+      directory: tempDir,
+    };
+    const output = {
+      title: 'read sample.ts',
+      output: content,
+      metadata: {},
+    };
+
+    await hook['tool.execute.after'](input, output);
+
+    expect(typeof output.output).toBe('string');
+    expect(output.output).toMatch(/^\[sample\.ts#[0-9A-F]{4}\]/);
+    expect(output.output).toContain('1:const a = 1;');
+    expect(output.output).toContain('2:const b = 2;');
   });
 
-  it('different content mints different tags', () => {
-    const store = new InMemorySnapshotStore();
-    const tag1 = store.record('a.ts', 'const x = 1;\n');
-    const tag2 = store.record('a.ts', 'const x = 2;\n');
-    expect(tag1).not.toBe(tag2);
-  });
-});
+  it('2. snapshot created -> hashline_edit with current tag succeeds', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'file.ts');
+    const original = 'let x = 1;\nlet y = 2;\n';
+    await fs.writeFile(filePath, original, 'utf8');
 
-// ── Patcher integration tests ──────────────────────────────────────────────
+    // Simulate read
+    const output = { output: original };
+    await hook['tool.execute.after'](
+      { tool: 'read', args: { path: 'file.ts' }, directory: tempDir },
+      output,
+    );
 
-describe('hashline patcher — core operations', () => {
-  let fs: InMemoryFilesystem;
-  let snapshots: InMemorySnapshotStore;
-  let patcher: Patcher;
+    const match = (output.output as string).match(/^\[file\.ts#([0-9A-F]{4})\]/);
+    expect(match).not.toBeNull();
+    const tag = match![1];
 
-  beforeEach(() => {
-    fs = new InMemoryFilesystem();
-    snapshots = new InMemorySnapshotStore();
-    patcher = new Patcher({ fs, snapshots, enforceSeenLines: false });
-  });
+    // Execute hashline_edit with valid tag
+    const patch = `[file.ts#${tag}]\nPUT 1.=1:\n+let x = 42;`;
+    const result = await tool.execute({ patch }, {} as any);
 
-  it('applies a simple line replacement', async () => {
-    const original = 'const x = 1;\nconst y = 2;\nconst z = 3;\n';
-    await fs.writeText('src/a.ts', original);
-    const tag = snapshots.record('src/a.ts', original);
-
-    const patchText = `[src/a.ts#${tag}]\nPUT 2.=2:\n+const y = 99;`;
-    const patch = Patch.parse(patchText);
-    const result = await patcher.apply(patch);
-
-    expect(result.sections[0].op).toBe('update');
-    const content = await fs.readText('src/a.ts');
-    expect(content).toContain('const y = 99;');
-    expect(content).toContain('const x = 1;');
-    expect(content).toContain('const z = 3;');
+    expect(result).toContain('Successfully applied hashline edit');
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk).toBe('let x = 42;\nlet y = 2;\n');
   });
 
-  it('inserts lines with PUT >N', async () => {
-    const original = 'line1\nline2\n';
-    await fs.writeText('test.txt', original);
-    const tag = snapshots.record('test.txt', original);
+  it('3. concurrent file mutation -> stale tag rejects and file remains untouched', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'concurrent.ts');
+    const original = 'const alpha = 100;\n';
+    await fs.writeFile(filePath, original, 'utf8');
 
-    const patchText = `[test.txt#${tag}]\nPUT >1:\n+inserted`;
-    const patch = Patch.parse(patchText);
-    await patcher.apply(patch);
+    // Read to obtain tag
+    const output = { output: original };
+    await hook['tool.execute.after'](
+      { tool: 'read', args: { path: 'concurrent.ts' }, directory: tempDir },
+      output,
+    );
+    const tag = (output.output as string).match(/^\[concurrent\.ts#([0-9A-F]{4})\]/)![1];
 
-    const content = await fs.readText('test.txt');
-    expect(content).toContain('line1\ninserted\nline2');
-  });
+    // Simulate external concurrent modification on disk
+    const concurrentContent = 'const alpha = 999;\n// concurrent edit\n';
+    await fs.writeFile(filePath, concurrentContent, 'utf8');
 
-  it('deletes lines with CUT', async () => {
-    const original = 'keep1\ndelete_me\nkeep2\n';
-    await fs.writeText('test.txt', original);
-    const tag = snapshots.record('test.txt', original);
+    // Try applying patch anchored to stale tag
+    const patch = `[concurrent.ts#${tag}]\nPUT 1.=1:\n+const alpha = 500;`;
 
-    const patchText = `[test.txt#${tag}]\nCUT 2.=2`;
-    const patch = Patch.parse(patchText);
-    await patcher.apply(patch);
-
-    const content = await fs.readText('test.txt');
-    expect(content).not.toContain('delete_me');
-    expect(content).toContain('keep1');
-    expect(content).toContain('keep2');
-  });
-
-  it('rejects stale tag — different content hash', async () => {
-    const original = 'const x = 1;\n';
-    await fs.writeText('src/a.ts', original);
-    const staleTag = snapshots.record('src/a.ts', original);
-
-    // Simulate concurrent modification (file changed on disk)
-    await fs.writeText('src/a.ts', 'const x = 999;\n');
-    // Note: snapshot store still has the old record
-
-    const patchText = `[src/a.ts#${staleTag}]\nPUT 1.=1:\n+const x = 42;`;
-    const patch = Patch.parse(patchText);
-
-    // Patcher should throw on mismatch (or attempt recovery)
-    // The exact behavior depends on whether recovery succeeds.
-    // For a completely different file, recovery should fail.
+    let threw = false;
     try {
-      await patcher.apply(patch);
-      // If recovery succeeds, that's also acceptable upstream behavior.
-      // We just verify the file isn't silently corrupted.
-      const content = await fs.readText('src/a.ts');
-      expect(typeof content).toBe('string'); // didn't throw, verify still a string
-    } catch (err) {
-      // Expected: mismatch rejection
-      expect(err).toBeInstanceOf(Error);
-      // File should not be corrupted
-      const content = await fs.readText('src/a.ts');
-      expect(content).toBe('const x = 999;\n');
+      await tool.execute({ patch }, {} as any);
+    } catch (err: any) {
+      threw = true;
+      expect(err.message).toContain('Hashline tag mismatch');
+      expect(err.message).toContain('Re-read the file');
     }
+
+    expect(threw).toBe(true);
+
+    // Verify file content on disk was NOT corrupted or modified
+    const currentOnDisk = await fs.readFile(filePath, 'utf8');
+    expect(currentOnDisk).toBe(concurrentContent);
   });
 
-  it('applies multiple edits in one patch', async () => {
-    const original = 'a\nb\nc\n';
-    await fs.writeText('f.txt', original);
-    const tag = snapshots.record('f.txt', original);
-
-    // Replace line 1 and line 3 in separate hunks
-    const patchText = `[f.txt#${tag}]\nPUT 1.=1:\n+A\nPUT 3.=3:\n+C`;
-    const patch = Patch.parse(patchText);
-    await patcher.apply(patch);
-
-    const content = await fs.readText('f.txt');
-    expect(content).toContain('A');
-    expect(content).toContain('b');
-    expect(content).toContain('C');
+  it('4. native edit without hashline -> unaffected', async () => {
+    // Hashline hook does NOT intercept edit tool in tool.execute.before or tool.execute.after
+    const readHook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const editOutput = { output: 'File edited successfully' };
+    await readHook['tool.execute.after'](
+      { tool: 'edit', args: { filePath: 'foo.ts', oldString: 'a', newString: 'b' } },
+      editOutput,
+    );
+    expect(editOutput.output).toBe('File edited successfully');
   });
 
-  it('handles CRLF line endings — preserves them after edit', async () => {
-    const original = 'line1\r\nline2\r\nline3\r\n';
-    await fs.writeText('crlf.txt', original);
-    const tag = snapshots.record('crlf.txt', original);
-
-    const patchText = `[crlf.txt#${tag}]\nPUT 2.=2:\n+REPLACED`;
-    const patch = Patch.parse(patchText);
-    await patcher.apply(patch);
-
-    const content = await fs.readText('crlf.txt');
-    // Patcher restores line endings
-    expect(content).toContain('line1');
-    expect(content).toContain('REPLACED');
-    expect(content).toContain('line3');
+  it('5. native apply_patch without hashline -> unaffected', async () => {
+    const readHook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const patchOutput = { output: 'Patch applied successfully' };
+    await readHook['tool.execute.after'](
+      { tool: 'apply_patch', args: { patchText: '*** patch ***' } },
+      patchOutput,
+    );
+    expect(patchOutput.output).toBe('Patch applied successfully');
   });
 
-  it('handles empty file — creates content', async () => {
-    const original = '';
-    await fs.writeText('empty.ts', original);
-    const tag = snapshots.record('empty.ts', original);
+  it('6. hashline disabled -> read hook does not modify output', async () => {
+    const disabledHook = createHashlineReadHook({ enabled: false, root: tempDir });
+    const original = 'plain text content\n';
+    const output = { output: original };
 
-    const patchText = `[empty.ts#${tag}]\nPUT >$:\n+// added to empty file`;
-    const patch = Patch.parse(patchText);
-    await patcher.apply(patch);
+    await disabledHook['tool.execute.after'](
+      { tool: 'read', args: { path: 'any.ts' } },
+      output,
+    );
 
-    const content = await fs.readText('empty.ts');
-    expect(content).toContain('// added to empty file');
+    expect(output.output).toBe(original);
   });
 
-  it('rejects malformed patch — missing tag', async () => {
-    // A patch without a valid [path#TAG] header should not parse as hashline.
-    const notHashline = 'just plain text with no header';
-    expect(notHashline).not.toMatch(/^\[.+#[0-9A-F]{4}\]/m);
+  it('7. CRLF line endings preserved on edit', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'crlf.ts');
+    const crlfContent = 'line1\r\nline2\r\nline3\r\n';
+    await fs.writeFile(filePath, crlfContent, 'utf8');
+
+    const output = { output: crlfContent };
+    await hook['tool.execute.after'](
+      { tool: 'read', args: { path: 'crlf.ts' }, directory: tempDir },
+      output,
+    );
+    const tag = (output.output as string).match(/^\[crlf\.ts#([0-9A-F]{4})\]/)![1];
+
+    const patch = `[crlf.ts#${tag}]\nPUT 2.=2:\n+line2_modified`;
+    await tool.execute({ patch }, {} as any);
+
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk).toContain('line2_modified');
   });
 
-  it('no corruption after failed edit — file unchanged on mismatch', async () => {
-    const original = 'safe content\n';
-    await fs.writeText('safe.ts', original);
-    // Record a tag then immediately change the file without updating store
-    const staleTag = snapshots.record('safe.ts', 'different original\n');
-
-    const patchText = `[safe.ts#${staleTag}]\nPUT 1.=1:\n+corrupted`;
-    const patch = Patch.parse(patchText);
-
-    try {
-      await patcher.apply(patch);
-    } catch {
-      // Verify file was not corrupted
-      const content = await fs.readText('safe.ts');
-      expect(content).toBe('safe content\n');
-    }
-  });
-});
-
-// ── Feature-flag disabled fallback ──────────────────────────────────────────
-
-describe('hashline — disabled fallback', () => {
-  it('isHashlinePatch returns false for standard patch text', () => {
-    const standardPatch = `*** Begin Patch
-*** Update File: src/a.ts
-@@@ -1,3 +1,3 @@@
- line1
--old line
-+new line
- line3
-*** End Patch`;
-    const HASHLINE_HEADER_RE = /^\[.+#[0-9A-F]{4}\]/m;
-    expect(HASHLINE_HEADER_RE.test(standardPatch)).toBe(false);
+  it('8. path safety -> out-of-worktree path rejected', async () => {
+    const fsAdapter = await createNodeFsFilesystem(tempDir);
+    expect(fsAdapter.readText('../outside.txt')).rejects.toThrow('Path outside workspace boundary');
   });
 
-  it('isHashlinePatch returns true for hashline patch text', () => {
-    const hashlinePatch = '[src/a.ts#A1B2]\nPUT 1.=1:\n+new line';
-    const HASHLINE_HEADER_RE = /^\[.+#[0-9A-F]{4}\]/m;
-    expect(HASHLINE_HEADER_RE.test(hashlinePatch)).toBe(true);
-  });
-});
-
-// ── Overlapping / concurrent edit protection ───────────────────────────────
-
-describe('hashline — concurrent modification protection', () => {
-  it('second edit with fresh tag succeeds after first edit', async () => {
-    const fs = new InMemoryFilesystem();
-    const snapshots = new InMemorySnapshotStore();
-    const patcher = new Patcher({ fs, snapshots, enforceSeenLines: false });
-
-    const v1 = 'const a = 1;\nconst b = 2;\n';
-    await fs.writeText('x.ts', v1);
-    const tag1 = snapshots.record('x.ts', v1);
-
-    // First edit
-    const patch1 = Patch.parse(`[x.ts#${tag1}]\nPUT 1.=1:\n+const a = 10;`);
-    await patcher.apply(patch1);
-
-    // Get current content and mint fresh tag
-    const v2 = await fs.readText('x.ts');
-    const tag2 = snapshots.record('x.ts', v2);
-
-    // Second edit with fresh tag
-    const patch2 = Patch.parse(`[x.ts#${tag2}]\nPUT 2.=2:\n+const b = 20;`);
-    await patcher.apply(patch2);
-
-    const final = await fs.readText('x.ts');
-    expect(final).toContain('const a = 10;');
-    expect(final).toContain('const b = 20;');
+  it('9. missing patch argument throws error', async () => {
+    const tool = createHashlineEditTool({ root: tempDir });
+    expect(tool.execute({} as any, {} as any)).rejects.toThrow('Missing required argument: patch');
   });
 });

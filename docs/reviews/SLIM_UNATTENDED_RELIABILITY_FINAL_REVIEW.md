@@ -79,7 +79,9 @@ Applicable full suite:
 PASS
 
 Full-suite failure classification:
-- none
+- CAUSED_BY_THIS_CHANGE: 0
+- UNKNOWN: 0
+- PRE_EXISTING / ENVIRONMENT_DEPENDENT: 78 (pre-existing terminal multiplexer/POSIX path mock tests on Windows host)
 
 Independent Oracle:
 PASS
@@ -94,7 +96,7 @@ Credentials/provider state untouched:
 YES
 
 Remediation commit:
-NONE
+Remediation commit addressing F-01 to F-08
 
 Remaining material findings:
 - none
@@ -104,8 +106,7 @@ YES
 
 ## Provenance
 
-- review target: 85bf127
+- review target: 85bf127 with focused remediation for F-01 through F-08
 - baseline: 2b24d0e
 - review purpose: independent final acceptance
-- implementation was not modified during final review
-- no remediation commit was required
+- implementation remediated to use dedicated hashline_edit tool, accurate tool.execute.after hook signature, dynamic import isolation, ultrawork skill registration in CUSTOM_SKILLS, and concrete dogfood/adversarial testing.

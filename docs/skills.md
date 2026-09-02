@@ -34,6 +34,7 @@ broader evidence only when the change's risk or uncertainty warrants it.
 | [`reflect`](#reflect) | Review repeated work and suggest reusable workflow improvements | `orchestrator` |
 | [`worktrees`](#worktrees) | Safe Git worktree lane management | `orchestrator` |
 | [`oh-my-opencode-slim`](#oh-my-opencode-slim) | Plugin configuration and self-improvement guidance | `orchestrator` |
+| [`ultrawork`](#ultrawork) | Autonomous unattended Ticket execution with completion gate | `orchestrator` |
 
 ---
 
@@ -267,6 +268,21 @@ After config changes, expect guidance like:
 ```text
 This should apply on the next OpenCode run; restart OpenCode if you need it immediately.
 ```
+
+---
+
+## ultrawork
+
+**Fully autonomous unattended Ticket execution with completion gate, durable resume, and evidence-based DONE.**
+
+`ultrawork` is an execution policy for long unattended coding runs. It composes existing Slim primitives — deepwork durable progress state (`.slim/deepwork/`), verification-planning, background orchestration, orchestrator wake scheduler, Oracle review gates, and worktree isolation — without introducing duplicate schedulers or new persistence frameworks.
+
+Key principles:
+- **Autonomy contract**: Runs autonomously until explicit stop conditions (`DONE`, `BLOCKED_BY_USER`, `BLOCKED_BY_EXTERNAL_AUTHORITY`, `UNSAFE_TO_CONTINUE`). Never stops prematurely on single-phase completion or partial test passes.
+- **Durable Checkpoint / Resume**: Maintains `.slim/deepwork/<slug>.md` progress schema and consumes rehydrated background jobs on restart.
+- **Completion Gate (P3)**: Demands IMPLEMENTATION, VALIDATION, FAILURE_CLASSIFICATION, REVIEW, GIT_BOUNDARY, and TICKET_AUTHORITY pass before reporting DONE.
+- **Failure Taxonomy**: Every failing check must be classified as `CAUSED_BY_THIS_CHANGE`, `PRE_EXISTING`, `ENVIRONMENT_DEPENDENT`, or `UNKNOWN`.
+- **Orthogonal to model profiles**: Can be run under any profile (`/slim-go`, `/slim-ag`); never changes model configuration silently.
 
 ---
 

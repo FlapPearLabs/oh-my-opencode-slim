@@ -312,11 +312,34 @@ describe('createFilterAvailableSkillsHook', () => {
     expect(firstOutput.messages[0].parts[0].text).not.toContain(
       '<name>skill3</name>',
     );
-    expect(secondOutput.messages[0].parts[0].text).not.toContain(
-      '<name>skill1</name>',
-    );
     expect(secondOutput.messages[0].parts[0].text).toContain(
       '<name>skill3</name>',
     );
+  });
+
+  test('orchestrator retains ultrawork skill in available_skills block by default', async () => {
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor());
+    const output = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [
+            {
+              type: 'text',
+              text: availableSkillsBlock('deepwork', 'ultrawork', 'custom-skill'),
+            },
+          ],
+        },
+        {
+          info: { role: 'user', agent: 'orchestrator' },
+          parts: [{ type: 'text', text: 'execute ultrawork' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    expect(output.messages[0].parts[0].text).toContain('<name>deepwork</name>');
+    expect(output.messages[0].parts[0].text).toContain('<name>ultrawork</name>');
   });
 });

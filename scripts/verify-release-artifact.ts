@@ -42,6 +42,7 @@ const packagedRequiredFiles = [
   'src/skills/reflect/SKILL.md',
   'src/skills/oh-my-opencode-slim/SKILL.md',
   'src/skills/worktrees/SKILL.md',
+  'src/skills/ultrawork/SKILL.md',
 ];
 
 function fail(message: string): never {

@@ -70,4 +70,11 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     allowedAgents: ['orchestrator'],
     sourcePath: 'src/skills/worktrees',
   },
+  {
+    name: 'ultrawork',
+    description:
+      'Fully autonomous unattended Ticket execution with completion gate, durable resume, and evidence-based DONE',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/ultrawork',
+  },
 ];

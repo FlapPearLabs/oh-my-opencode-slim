@@ -26,7 +26,8 @@ import {
   createChatHeadersHook,
   createDeepworkCommandHook,
   createFilterAvailableSkillsHook,
-  createHashlineHook,
+  createHashlineEditTool,
+  createHashlineReadHook,
   createJsonErrorRecoveryHook,
   createLoopCommandHook,
   createOrchestratorWakeScheduler,
@@ -250,7 +251,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let filterAvailableSkills: ReturnType<typeof createFilterAvailableSkillsHook>;
   let postFileToolNudge: ReturnType<typeof createPostFileToolNudgeHook>;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
-  let hashlineHook: ReturnType<typeof createHashlineHook>;
+  let hashlineReadHook: ReturnType<typeof createHashlineReadHook>;
   let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
   let toolLoopGuard: ToolLoopGuardHook;
   let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
@@ -537,7 +538,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
 
     applyPatch = createApplyPatchHook(ctx);
-    hashlineHook = createHashlineHook({
+    hashlineReadHook = createHashlineReadHook({
       enabled: runtime.hashline_edit === true,
       root: ctx.directory ?? process.cwd(),
     });
@@ -549,8 +550,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     postFileToolNudgeAfter = wrapPostToolHook('post-file-tool-nudge', (i, o) =>
       postFileToolNudge['tool.execute.after'](i as never, o as never),
     );
-    hashlineAfter = wrapPostToolHook('hashline-edit', (i, o) =>
-      hashlineHook.toolExecuteAfter(i as never, o as never),
+    hashlineAfter = wrapPostToolHook('hashline-read', (i, o) =>
+      hashlineReadHook['tool.execute.after'](i as never, o as never),
     );
     jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
       jsonErrorRecovery['tool.execute.after'](i as never, o as never),
@@ -609,6 +610,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
 
     const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
+    const shouldRegisterHashlineEdit = runtime.hashline_edit === true;
     tools = {
       ...taskCancelTools,
       ...taskMessageTools,
@@ -618,6 +620,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...waitForUserTools,
       ...acpRunTools,
       ...(shouldRegisterWebfetch ? { webfetch } : {}),
+      ...(shouldRegisterHashlineEdit
+        ? {
+            hashline_edit: createHashlineEditTool({
+              root: ctx.directory ?? process.cwd(),
+            }),
+          }
+        : {}),
       ast_grep_search,
       ast_grep_replace,
     };
@@ -1251,7 +1260,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         output as never,
       );
-      await hashlineHook.toolExecuteBefore(input as never, output as never);
       await applyPatch['tool.execute.before'](input as never, output as never);
       await taskSessionManagerHook['tool.execute.before'](
         input as never,

@@ -1382,6 +1382,10 @@
         ],
         "additionalProperties": false
       }
+    },
+    "hashline_edit": {
+      "description": "When true, enable hash-anchored editing via @oh-my-pi/hashline. Annotates read tool output with content-hash line anchors and validates those anchors before applying edits, rejecting stale patches that would corrupt concurrent work. Disabled by default. See docs/hashline.md for usage.",
+      "type": "boolean"
     }
   },
   "title": "oh-my-opencode-slim",
