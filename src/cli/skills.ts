@@ -58,6 +58,10 @@ export function getSkillPermissionsForAgent(
         permissions[name] = 'allow';
       }
     }
+    for (const name of disabledSkills) {
+      permissions[name] = 'deny';
+    }
+    return permissions;
   }
 
   // Apply permissions from bundled custom skills

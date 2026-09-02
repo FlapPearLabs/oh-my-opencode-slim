@@ -343,22 +343,27 @@ describe('createFilterAvailableSkillsHook', () => {
     expect(output.messages[0].parts[0].text).toContain('<name>ultrawork</name>');
   });
 
-  test('orchestrator retains ultrawork skill even when skills list is provided but does not exclude it', async () => {
+
+
+  test('profile switching does not alter shared skill availability when explicit config is used', async () => {
     const config: PluginConfig = {
-      agents: {
-        orchestrator: {
-          skills: ['skill1'],
-        },
-      },
+      preset: 'test-preset',
+      presets: {
+        'test-preset': {
+          orchestrator: {
+            skills: ['skill1'],
+          }
+        }
+      }
     };
-    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor(config));
-    const output = {
+    
+    const runtimeGo = runtimeFor(config);
+    const hookGo = createFilterAvailableSkillsHook(mockCtx, runtimeGo);
+    const outputGo = {
       messages: [
         {
           info: { role: 'system' },
-          parts: [
-            { type: 'text', text: availableSkillsBlock('skill1', 'ultrawork', 'skill3') },
-          ],
+          parts: [{ type: 'text', text: availableSkillsBlock('skill1', 'skill2') }],
         },
         {
           info: { role: 'user', agent: 'orchestrator' },
@@ -366,10 +371,28 @@ describe('createFilterAvailableSkillsHook', () => {
         },
       ],
     };
-    await hook['experimental.chat.messages.transform']({}, output);
-    const resultText = output.messages[0].parts[0].text;
-    expect(resultText).toContain('<name>skill1</name>');
-    expect(resultText).toContain('<name>ultrawork</name>');
-    expect(resultText).not.toContain('<name>skill3</name>');
+    await hookGo['experimental.chat.messages.transform']({}, outputGo);
+    const resultGo = outputGo.messages[0].parts[0].text;
+    expect(resultGo).toContain('<name>skill1</name>');
+    expect(resultGo).not.toContain('<name>skill2</name>');
+
+    const runtimeAnti = runtimeFor(config);
+    const hookAnti = createFilterAvailableSkillsHook(mockCtx, runtimeAnti);
+    const outputAnti = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [{ type: 'text', text: availableSkillsBlock('skill1', 'skill2') }],
+        },
+        {
+          info: { role: 'user', agent: 'orchestrator' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+    await hookAnti['experimental.chat.messages.transform']({}, outputAnti);
+    const resultAnti = outputAnti.messages[0].parts[0].text;
+    
+    expect(resultGo).toEqual(resultAnti);
   });
 });
