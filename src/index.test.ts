@@ -428,6 +428,8 @@ describe('plugin config model inheritance', () => {
       XDG_DATA_HOME: `${configDir}/data`,
       XDG_CACHE_HOME: `${configDir}/cache`,
       OPENCODE_LOG_DIR: `${configDir}/logs`,
+      OH_MY_OPENCODE_SLIM_TEST_PROFILE_DIR: configDir,
+      OH_MY_OPENCODE_SLIM_TEST_PROFILE_ENABLED: '1',
     };
 
     const client = createPluginClient(async () => ({}));
@@ -438,6 +440,48 @@ describe('plugin config model inheritance', () => {
       serverUrl: new URL('http://127.0.0.1:4096'),
     } as never);
   }
+
+  test('profile inheritance > host explicit model override wins over selected profile', async () => {
+    const hooks = await loadConfiguredPlugin({});
+    const configDir = configDirs[configDirs.length - 1] as string;
+
+    // Write profile
+    await Bun.write(
+      `${configDir}/slim-profile.json`,
+      JSON.stringify({ profile: 'antigravity' }),
+    );
+
+    // Simulating user opencode.json config overriding oracle model
+    const hostConfig: Record<string, unknown> = {
+      agent: {
+        oracle: { model: 'host/explicit-override' },
+        unrelated: { model: 'should-survive' },
+      },
+    };
+
+    try {
+      await hooks.config?.(hostConfig);
+
+      const agents = hostConfig.agent as Record<
+        string,
+        Record<string, unknown>
+      >;
+
+      // Host override must win
+      expect(agents.oracle?.model).toBe('host/explicit-override');
+
+      // Profile fallback should apply to agents with no host override
+      expect(agents.orchestrator?.model).toBe(
+        'google/antigravity-gemini-3.1-pro',
+      );
+      expect(agents.fixer?.model).toBe('google/antigravity-gemini-3.7-flash');
+
+      // Unrelated agent should survive
+      expect(agents.unrelated?.model).toBe('should-survive');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
 
   test('session inheritance removes a stale host model in the final config', async () => {
     const hooks = await loadConfiguredPlugin({

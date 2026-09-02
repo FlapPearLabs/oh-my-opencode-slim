@@ -1,3 +1,5 @@
+import { parseConfig, writeConfig } from '../../cli/config-io';
+import { getExistingConfigPath } from '../../cli/paths';
 import {
   PROFILE_MAPPINGS,
   readProfile,
@@ -5,7 +7,28 @@ import {
 } from '../../config/profile';
 import { registerCommandHook } from '../command-hook-utils';
 
-export function createProfileCommandsHook(): {
+function clearHostModelOverrides(managedAgentNames: string[]) {
+  const configPath = getExistingConfigPath();
+  const { config, error } = parseConfig(configPath);
+  if (error || !config || !config.agent) return;
+
+  const agentConfig = config.agent as Record<string, Record<string, unknown>>;
+  let changed = false;
+
+  for (const name of managedAgentNames) {
+    const entry = agentConfig[name];
+    if (entry && entry.model !== undefined) {
+      delete entry.model;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    writeConfig(configPath, config);
+  }
+}
+
+export function createProfileCommandsHook(managedAgentNames: string[]): {
   registerCommand: (config: Record<string, unknown>) => void;
   handleCommandExecuteBefore: (
     input: { command: string; sessionID: string; arguments: string },
@@ -40,6 +63,7 @@ export function createProfileCommandsHook(): {
     handleCommandExecuteBefore: async (input, output) => {
       if (input.command === 'slim-go') {
         writeProfile('opencode-go');
+        clearHostModelOverrides(managedAgentNames);
         output.parts.length = 0;
         output.parts.push({
           type: 'text',
@@ -47,6 +71,7 @@ export function createProfileCommandsHook(): {
         });
       } else if (input.command === 'slim-ag') {
         writeProfile('antigravity');
+        clearHostModelOverrides(managedAgentNames);
         output.parts.length = 0;
         output.parts.push({
           type: 'text',

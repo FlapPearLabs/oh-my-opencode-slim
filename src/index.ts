@@ -439,7 +439,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       sessionLifecycle,
     );
 
-    profileCommandsHook = createProfileCommandsHook();
+    profileCommandsHook = createProfileCommandsHook(Object.keys(agents));
     deepworkCommandHook = createDeepworkCommandHook();
     reflectCommandHook = createReflectCommandHook();
     loopCommandHook = createLoopCommandHook();
@@ -753,6 +753,29 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
+      // ------ PROFILE SWITCH FEATURE ------
+      const activeProfile = readProfile();
+      const profileMapping = PROFILE_MAPPINGS[activeProfile];
+      if (profileMapping) {
+        for (const [agentName, profileModel] of Object.entries(
+          profileMapping,
+        )) {
+          const resolvedName = AGENT_ALIASES[agentName] ?? agentName;
+          const pluginAgent = agents[resolvedName] as
+            | Record<string, unknown>
+            | undefined;
+          if (pluginAgent) {
+            pluginAgent.model = profileModel.model;
+            if (profileModel.variant) {
+              pluginAgent.variant = profileModel.variant;
+            } else {
+              delete pluginAgent.variant;
+            }
+          }
+        }
+      }
+      // ------------------------------------
+
       // Merge Agent configs - per-agent shallow merge to preserve
       // user-supplied fields (e.g. tools, permission) from opencode.json
       if (!opencodeConfig.agent) {
@@ -896,34 +919,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           });
         }
       }
-
-      // ------ PROFILE SWITCH FEATURE ------
-      const activeProfile = readProfile();
-      const profileMapping = PROFILE_MAPPINGS[activeProfile];
-      if (profileMapping) {
-        for (const [agentName, profileModel] of Object.entries(
-          profileMapping,
-        )) {
-          const resolvedName = AGENT_ALIASES[agentName] ?? agentName;
-          const entry = configAgent[resolvedName] as
-            | Record<string, unknown>
-            | undefined;
-          if (entry) {
-            entry.model = profileModel.model;
-            if (profileModel.variant) {
-              entry.variant = profileModel.variant;
-            } else {
-              delete entry.variant;
-            }
-            log('[plugin] applied profile override', {
-              profile: activeProfile,
-              agent: resolvedName,
-              model: entry.model as string,
-            });
-          }
-        }
-      }
-      // ------------------------------------
 
       // Capture the resolved model state before optionally removing the
       // orchestrator model from the SDK config, so the TUI keeps showing the
