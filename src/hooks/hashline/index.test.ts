@@ -244,4 +244,130 @@ describe('hashline P0 integration', () => {
     // Should fail open, not append tag
     expect(output.output).not.toMatch(/^\[mismatch\.ts#/);
   });
+
+  it('12. F-01 CRLF full read -> edit succeeds', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'crlf-full.ts');
+    const crlfContent = 'line1\r\nline2\r\nline3\r\n';
+    await fs.writeFile(filePath, crlfContent, 'utf8');
+
+    const { input, output } = createMockReadPayload('crlf-full.ts', crlfContent);
+    await hook['tool.execute.after'](input, output);
+    const tag = (output.output as string).match(/^\[crlf-full\.ts#([0-9A-F]{4})\]/)![1];
+
+    const patch = `[crlf-full.ts#${tag}]\nPUT 2.=2:\n+line2_mod`;
+    await tool.execute({ patch }, {} as any);
+
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk).toBe('line1\r\nline2_mod\r\nline3\r\n');
+  });
+
+  it('13. F-01 CRLF partial read -> unseen-line edit REJECTS', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'crlf-partial1.ts');
+    const crlfContent = 'line1\r\nline2\r\nline3\r\n';
+    await fs.writeFile(filePath, crlfContent, 'utf8');
+
+    const { input, output } = createMockReadPayload('crlf-partial1.ts', crlfContent, 1, 2);
+    await hook['tool.execute.after'](input, output);
+    const tag = (output.output as string).match(/^\[crlf-partial1\.ts#([0-9A-F]{4})\]/)![1];
+
+    const patch = `[crlf-partial1.ts#${tag}]\nPUT 3.=3:\n+line3_mod`;
+    let threw = false;
+    try { await tool.execute({ patch }, {} as any); } catch (e: any) { threw = true; }
+    expect(threw).toBe(true);
+  });
+
+  it('14. F-01 CRLF partial read -> seen-line edit succeeds', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'crlf-partial2.ts');
+    const crlfContent = 'line1\r\nline2\r\nline3\r\n';
+    await fs.writeFile(filePath, crlfContent, 'utf8');
+
+    const { input, output } = createMockReadPayload('crlf-partial2.ts', crlfContent, 1, 2);
+    await hook['tool.execute.after'](input, output);
+    const tag = (output.output as string).match(/^\[crlf-partial2\.ts#([0-9A-F]{4})\]/)![1];
+
+    const patch = `[crlf-partial2.ts#${tag}]\nPUT 2.=2:\n+line2_mod`;
+    await tool.execute({ patch }, {} as any);
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk).toBe('line1\r\nline2_mod\r\nline3\r\n');
+  });
+
+  it('15. F-01 UTF-8 BOM unchanged file -> tag validates', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'bom-valid.ts');
+    const bomContent = '\uFEFFline1\nline2\n';
+    await fs.writeFile(filePath, bomContent, 'utf8');
+
+    const { input, output } = createMockReadPayload('bom-valid.ts', bomContent);
+    await hook['tool.execute.after'](input, output);
+    const tag = (output.output as string).match(/^\[bom-valid\.ts#([0-9A-F]{4})\]/)?.[1];
+    expect(tag).toBeTruthy();
+    
+    // Tag should be valid for an edit (noop or real)
+    const patch = `[bom-valid.ts#${tag}]\nPUT 2.=2:\n+line2`;
+    await tool.execute({ patch }, {} as any);
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk).toBe('\uFEFFline1\nline2\n');
+  });
+
+  it('16. F-01 UTF-8 BOM edit -> BOM preserved', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'bom-edit.ts');
+    const bomContent = '\uFEFFline1\nline2\n';
+    await fs.writeFile(filePath, bomContent, 'utf8');
+
+    const { input, output } = createMockReadPayload('bom-edit.ts', bomContent);
+    await hook['tool.execute.after'](input, output);
+    const tag = (output.output as string).match(/^\[bom-edit\.ts#([0-9A-F]{4})\]/)![1];
+
+    const patch = `[bom-edit.ts#${tag}]\nPUT 1.=1:\n+line1_mod`;
+    await tool.execute({ patch }, {} as any);
+    
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk.charCodeAt(0)).toBe(0xFEFF);
+    expect(onDisk).toBe('\uFEFFline1_mod\nline2\n');
+  });
+
+  it('17. F-01 BOM + CRLF combined', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'bom-crlf.ts');
+    const combinedContent = '\uFEFFline1\r\nline2\r\n';
+    await fs.writeFile(filePath, combinedContent, 'utf8');
+
+    const { input, output } = createMockReadPayload('bom-crlf.ts', combinedContent);
+    await hook['tool.execute.after'](input, output);
+    const tag = (output.output as string).match(/^\[bom-crlf\.ts#([0-9A-F]{4})\]/)![1];
+
+    const patch = `[bom-crlf.ts#${tag}]\nPUT 2.=2:\n+line2_mod`;
+    await tool.execute({ patch }, {} as any);
+
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk.charCodeAt(0)).toBe(0xFEFF);
+    expect(onDisk).toBe('\uFEFFline1\r\nline2_mod\r\n');
+  });
+
+  it('18. F-01 no regression on LF', async () => {
+    const hook = createHashlineReadHook({ enabled: true, root: tempDir });
+    const tool = createHashlineEditTool({ root: tempDir });
+    const filePath = path.join(tempDir, 'lf.ts');
+    const content = 'line1\nline2\n';
+    await fs.writeFile(filePath, content, 'utf8');
+
+    const { input, output } = createMockReadPayload('lf.ts', content);
+    await hook['tool.execute.after'](input, output);
+    const tag = (output.output as string).match(/^\[lf\.ts#([0-9A-F]{4})\]/)![1];
+
+    const patch = `[lf.ts#${tag}]\nPUT 1.=1:\n+line1_mod`;
+    await tool.execute({ patch }, {} as any);
+    const onDisk = await fs.readFile(filePath, 'utf8');
+    expect(onDisk).toBe('line1_mod\nline2\n');
+  });
 });

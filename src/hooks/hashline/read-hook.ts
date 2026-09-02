@@ -48,19 +48,22 @@ export function createHashlineReadHook(options: HashlineReadHookOptions) {
       if (!rawPath || typeof rawPath !== 'string') return;
 
       try {
-        const { formatHashlineHeader } = await import('@oh-my-pi/hashline');
+        const { formatHashlineHeader, stripBom, normalizeToLF } = await import('@oh-my-pi/hashline');
         const { createNodeFsFilesystem } = await import('./filesystem');
         
         const fsAdapter = await createNodeFsFilesystem(root);
         const fullText = await fsAdapter.readText(rawPath);
         
+        const noBomText = stripBom(fullText).text;
+        const lfText = normalizeToLF(noBomText);
+
         const lineStart = typeof display.lineStart === 'number' ? display.lineStart : 1;
         const lineEnd = typeof display.lineEnd === 'number' ? display.lineEnd : 1;
         const displayedText = display.text || '';
 
-        const lines = fullText.split(/\r?\n/);
+        const lines = lfText.split('\n');
         const slice = lines.slice(Math.max(0, lineStart - 1), lineEnd).join('\n');
-        const normalizedDisplayed = displayedText.replace(/\r\n/g, '\n');
+        const normalizedDisplayed = normalizeToLF(stripBom(displayedText).text);
 
         if (slice !== normalizedDisplayed) {
           log('hashline read verification mismatch', { path: rawPath, lineStart, lineEnd });
@@ -72,7 +75,7 @@ export function createHashlineReadHook(options: HashlineReadHookOptions) {
 
         const snapshots = await getGlobalSnapshotStore();
         const canonicalPath = fsAdapter.canonicalPath(rawPath);
-        const tag = snapshots.record(canonicalPath, fullText, seenLines);
+        const tag = snapshots.record(canonicalPath, lfText, seenLines);
         
         const relPath = path.relative(root, canonicalPath).replace(/\\/g, '/');
         const header = formatHashlineHeader(relPath, tag);
