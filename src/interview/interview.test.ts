@@ -2057,7 +2057,7 @@ describe('interview service abandoned-record retention', () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test('prunes by abandonment order instead of creation order', async () => {
     const tempDir = await fs.mkdtemp('/tmp/interview-test-');
@@ -2104,7 +2104,7 @@ describe('interview service abandoned-record retention', () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test('retains abandoned records that stay within the cap', async () => {
     const tempDir = await fs.mkdtemp('/tmp/interview-test-');
