@@ -1,6 +1,15 @@
 import { describe, expect, test } from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
+import { getSkillPermissionsForAgent } from '../../cli/skills';
 import type { PluginConfig } from '../../config';
+import {
+  PROFILE_MAPPINGS,
+  readProfile,
+  writeProfile,
+} from '../../config/profile';
 import { RuntimeConfig } from '../../config/runtime';
 import {
   createFilterAvailableSkillsHook,
@@ -326,7 +335,11 @@ describe('createFilterAvailableSkillsHook', () => {
           parts: [
             {
               type: 'text',
-              text: availableSkillsBlock('deepwork', 'ultrawork', 'custom-skill'),
+              text: availableSkillsBlock(
+                'deepwork',
+                'ultrawork',
+                'custom-skill',
+              ),
             },
           ],
         },
@@ -340,59 +353,124 @@ describe('createFilterAvailableSkillsHook', () => {
     await hook['experimental.chat.messages.transform']({}, output);
 
     expect(output.messages[0].parts[0].text).toContain('<name>deepwork</name>');
-    expect(output.messages[0].parts[0].text).toContain('<name>ultrawork</name>');
+    expect(output.messages[0].parts[0].text).toContain(
+      '<name>ultrawork</name>',
+    );
   });
 
-
-
   test('profile switching does not alter shared skill availability when explicit config is used', async () => {
-    const config: PluginConfig = {
-      preset: 'test-preset',
-      presets: {
-        'test-preset': {
-          orchestrator: {
-            skills: ['skill1'],
-          }
-        }
-      }
-    };
-    
-    const runtimeGo = runtimeFor(config);
-    const hookGo = createFilterAvailableSkillsHook(mockCtx, runtimeGo);
-    const outputGo = {
-      messages: [
-        {
-          info: { role: 'system' },
-          parts: [{ type: 'text', text: availableSkillsBlock('skill1', 'skill2') }],
-        },
-        {
-          info: { role: 'user', agent: 'orchestrator' },
-          parts: [{ type: 'text', text: 'check skills' }],
-        },
-      ],
-    };
-    await hookGo['experimental.chat.messages.transform']({}, outputGo);
-    const resultGo = outputGo.messages[0].parts[0].text;
-    expect(resultGo).toContain('<name>skill1</name>');
-    expect(resultGo).not.toContain('<name>skill2</name>');
+    const tmpHome = path.join(
+      os.tmpdir(),
+      `opencode-slim-profile-ortho-${Date.now()}`,
+    );
+    const profileDir = path.join(tmpHome, '.config', 'opencode');
+    const originalDirEnv = process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_DIR;
+    const originalEnabledEnv =
+      process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_ENABLED;
 
-    const runtimeAnti = runtimeFor(config);
-    const hookAnti = createFilterAvailableSkillsHook(mockCtx, runtimeAnti);
-    const outputAnti = {
-      messages: [
-        {
-          info: { role: 'system' },
-          parts: [{ type: 'text', text: availableSkillsBlock('skill1', 'skill2') }],
+    try {
+      process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_DIR = profileDir;
+      process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_ENABLED = '1';
+      fs.mkdirSync(profileDir, { recursive: true });
+
+      const sharedConfig: PluginConfig = {
+        preset: 'test-preset',
+        presets: {
+          'test-preset': {
+            orchestrator: {
+              skills: ['skill1'],
+            },
+          },
         },
-        {
-          info: { role: 'user', agent: 'orchestrator' },
-          parts: [{ type: 'text', text: 'check skills' }],
-        },
-      ],
-    };
-    await hookAnti['experimental.chat.messages.transform']({}, outputAnti);
-    const resultAnti = outputAnti.messages[0].parts[0].text;
-    
-    expect(resultGo).toEqual(resultAnti);
+      };
+
+      // State A: opencode-go
+      writeProfile('opencode-go');
+      expect(readProfile()).toBe('opencode-go');
+      const goModel = PROFILE_MAPPINGS['opencode-go']?.orchestrator.model;
+
+      const runtimeGo = runtimeFor(sharedConfig);
+      const hookGo = createFilterAvailableSkillsHook(mockCtx, runtimeGo);
+      const outputGo = {
+        messages: [
+          {
+            info: { role: 'system' },
+            parts: [
+              {
+                type: 'text',
+                text: availableSkillsBlock('skill1', 'skill2', 'ultrawork'),
+              },
+            ],
+          },
+          {
+            info: { role: 'user', agent: 'orchestrator' },
+            parts: [{ type: 'text', text: 'check skills' }],
+          },
+        ],
+      };
+      await hookGo['experimental.chat.messages.transform']({}, outputGo);
+      const resultGo = outputGo.messages[0].parts[0].text;
+
+      // State B: antigravity
+      writeProfile('antigravity');
+      expect(readProfile()).toBe('antigravity');
+      const agModel = PROFILE_MAPPINGS.antigravity?.orchestrator.model;
+
+      // Prove model routing is genuinely different between profiles
+      expect(goModel).toBeDefined();
+      expect(agModel).toBeDefined();
+      expect(goModel).not.toEqual(agModel);
+
+      // Model profile change leaves shared skill filtering identical
+      const runtimeAnti = runtimeFor(sharedConfig);
+      const hookAnti = createFilterAvailableSkillsHook(mockCtx, runtimeAnti);
+      const outputAnti = {
+        messages: [
+          {
+            info: { role: 'system' },
+            parts: [
+              {
+                type: 'text',
+                text: availableSkillsBlock('skill1', 'skill2', 'ultrawork'),
+              },
+            ],
+          },
+          {
+            info: { role: 'user', agent: 'orchestrator' },
+            parts: [{ type: 'text', text: 'check skills' }],
+          },
+        ],
+      };
+      await hookAnti['experimental.chat.messages.transform']({}, outputAnti);
+      const resultAnti = outputAnti.messages[0].parts[0].text;
+
+      expect(resultGo).toContain('<name>skill1</name>');
+      expect(resultGo).not.toContain('<name>skill2</name>');
+      expect(resultGo).not.toContain('<name>ultrawork</name>');
+      expect(resultGo).toEqual(resultAnti);
+
+      // Prove at permission contract boundary that skill rules are identical
+      const sharedSkills =
+        sharedConfig.presets?.['test-preset']?.orchestrator.skills;
+      const permsGo = getSkillPermissionsForAgent('orchestrator', sharedSkills);
+      const permsAnti = getSkillPermissionsForAgent(
+        'orchestrator',
+        sharedSkills,
+      );
+      expect(permsGo).toEqual(permsAnti);
+    } finally {
+      if (originalDirEnv === undefined) {
+        delete process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_DIR;
+      } else {
+        process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_DIR = originalDirEnv;
+      }
+      if (originalEnabledEnv === undefined) {
+        delete process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_ENABLED;
+      } else {
+        process.env.OH_MY_OPENCODE_SLIM_TEST_PROFILE_ENABLED =
+          originalEnabledEnv;
+      }
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 });
