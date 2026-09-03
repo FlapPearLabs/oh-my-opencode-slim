@@ -1,16 +1,18 @@
 # Slim Runtime Wiring Acceptance Spec V1
 
-Status: **DRAFT — TICKET DECOMPOSITION AUTHORITY**
+Status: **APPROVED — FROZEN FOR TICKET DECOMPOSITION**
 
-Implementation status: **BLOCKED PENDING TICKET REVIEW**
+Implementation status: **NOT STARTED — TICKET DECOMPOSITION AUTHORIZED; IMPLEMENTATION REQUIRES USER APPROVAL**
 
 Repository: `FlapPearLabs/oh-my-opencode-slim`
 
 Planning branch: `work/slim-unattended-reliability`
 
-Remote planning baseline before this document: `54282994729de852e27751f80edde16a19e75d15`
+Approved implementation baseline: `547c3afc07d22f0e91af2db675e0d2d257ba1dd2`
 
-Latest implementation commit before the final review-only commit: `6e22b8c1169949802b246fe14d38bed5b2e43395`
+This document supersedes prior planning conclusions only where it explicitly
+states a newer approved authority. The legacy
+`SLIM_RUNTIME_WIRING_TICKET_GRAPH_V2_1.md` remains reference material only.
 
 This specification is the authority for the final runtime-wiring and real-host acceptance phase of the Slim Unattended Reliability V1 program.
 
@@ -27,6 +29,11 @@ The Unattended Reliability work has already established the intended architectur
 - P2 restart/resume by composing existing Slim persistence and rehydration;
 - P3 completion discipline using existing progress, TODO, validation, review, and reconciliation surfaces;
 - P4 watchdog/recovery by reusing existing wake, liveness, task-result, and revive behavior.
+
+The approved D-01 addition is one bounded WorkIntent adapter that wraps
+OpenCode-native session history and lifecycle hooks. It is not a Goal runtime,
+job board, scheduler, daemon, database, completion engine, or persistence
+subsystem.
 
 The remaining work is not a redesign.
 
@@ -118,11 +125,21 @@ Do not add a new:
 - autonomous execution loop;
 - persistence subsystem.
 
+The WorkIntent adapter approved in this specification is permitted only as a
+thin adapter over OpenCode session history. It does not change any of the
+counts above.
+
 Target:
 
 ```text
 New runtime state machines: 0
 New persistence systems: 0
+New scheduler: 0
+New job board: 0
+New watchdog engine: 0
+New completion engine: 0
+Duplicate UltraWork engine: 0
+New provider/account orchestration system: 0
 Duplicate scheduler: NO
 Duplicate job board: NO
 ```
@@ -215,7 +232,7 @@ A host/OpenCode explicit per-agent model override has higher precedence than the
 Required precedence remains:
 
 ```text
-host explicit model override
+user-owned explicit host override
     > selected Slim model profile
     > preset
     > agent factory/default
@@ -245,23 +262,124 @@ Do not collapse these values into one generic `profile` field.
 For an explicit profile switch:
 
 - stage the selected Slim model profile;
-- clear stale Slim-managed host model overrides where current accepted profile-switch behavior requires it;
-- preserve unrelated host configuration;
+- clear only a stale host model override that is provably Slim-managed under
+  existing authority;
+- preserve a user-explicit or unknown-origin host model override;
+- when ownership cannot be proven, preserve host state and report the conflict;
 - require restart where current host semantics require restart;
 - after restart, resolve the intended profile mapping;
 - retain identical shared Skills and orchestration behavior.
 
-Do not change accepted model mappings unless current repository authority proves the mapping has intentionally changed.
+Do not build an override-provenance database or routing framework. Do not
+change accepted model mappings unless current repository authority proves the
+mapping has intentionally changed.
 
 ---
 
-## 5. UltraWork Skill Discovery Requirement
+## 5. WorkIntent Continuity and Recovery
+
+### 5.1 Purpose and ownership
+
+WorkIntent provides bounded, session-level engineering intent continuity for
+unattended work. Its only responsibilities are recording and reconstructing:
+
+- objective;
+- success criteria;
+- state: `active`, `waiting_for_user`, `complete`, or `blocked`;
+- a short phase/progress reference;
+- bounded evidence references.
+
+The canonical record kind is `slim.work-intent.v1`. WorkIntent is a thin
+adapter around OpenCode-native session persistence and lifecycle seams, not an
+independent runtime subsystem. It does not own dispatch, scheduling, a job
+board, fallback, worktrees, CI, review, or completion decisions.
+
+### 5.2 Persistence and provenance
+
+OpenCode session history is the sole persistence authority. The canonical
+record MUST be a Slim-controlled tool/result envelope actually persisted by
+OpenCode in the current session history. A synthetic outgoing message transform
+or ordinary model free text is not a canonical record and MUST NOT be accepted
+as one.
+
+The parser accepts only one envelope per canonical host part, with all of:
+
+- `kind: "slim.work-intent.v1"`;
+- a fixed Slim-origin marker;
+- a binding to the current session ID; and
+- a schema-valid bounded payload.
+
+The record has no mutable revision or timestamp. Host message ordering is the
+freshness authority: `time_created`, then host message ID as its stable tie
+breaker. Later non-canonical messages do not change the selected record.
+
+The serialized envelope MUST be at most 8 KiB. The objective and success
+criteria are each at most 2,000 characters, `phaseRef` is at most 1,000
+characters, and `evidenceRefs` contains at most 8 references of at most 256
+characters each. These are fixed validation limits, not user configuration.
+
+Do not create or import:
+
+- JSON state files, filesystem ledgers, SQLite/databases, a custom persistence
+  service, checkpoint store, file locks, or a garbage-collection subsystem;
+- a revision or timestamp sequence solely to decide record freshness;
+- a Goal/Boulder/task runtime merely to store WorkIntent.
+
+### 5.3 Reconstruction and UNKNOWN
+
+Host-ordered session history defines freshness. The final recognizable
+canonical-record candidate is authoritative. If that candidate is malformed,
+truncated, schema-invalid, conflicting within the same canonical message, or
+not provably Slim-originated, reconstructed WorkIntent is `UNKNOWN`.
+
+`UNKNOWN` MUST NOT fall back to an older WorkIntent record. Falling back could
+resurrect an older active state after a later `blocked` or `complete` record
+became unreadable. Reload reconstructs only the in-memory view and MUST NOT
+dispatch work merely because a historical record exists.
+
+### 5.4 Compaction continuity
+
+Use OpenCode `experimental.session.compacting` and the existing Slim/OpenCode
+message/history-transform seam. The latest bounded canonical WorkIntent record
+must remain reconstructable across compaction; free-text progress is not a
+recovery authority.
+
+When valid WorkIntent cannot be reconstructed after compaction, state is
+`UNKNOWN` and autonomous continuation is suppressed. No compaction manager is
+authorized.
+
+### 5.5 State recording and normal-wake gate
+
+WorkIntent records a result of existing authority; it does not independently
+derive a completion, a block, or a continuation decision. Existing completion
+authority determines the applicable facts first. Only then may the adapter
+record `complete`. Likewise, `blocked` may be recorded only by the existing
+owner of the blocking condition, never from elapsed time, idle detection, or a
+failed prompt attempt.
+
+Before the existing normal orchestrator wake reserves work or calls
+`promptAsync`, it MUST evaluate reconstructed WorkIntent after its host-state
+snapshot has been read and before its final normal-continuation decision:
+
+- no valid canonical record or reconstructed `UNKNOWN` suppresses normal
+  continuation;
+- `waiting_for_user`, `complete`, and `blocked` suppress normal continuation;
+- `active` permits normal continuation only when the existing continuation
+  predicates also hold.
+
+A real user message does not itself rewrite WorkIntent to `active`. It is
+processed by the normal host/Slim path; an authorized Slim action may then
+write a new canonical `active` record. The narrow reconciliation wake in
+Section 10.2 is the only exception to this normal-continuation suppression,
+and it authorizes consumption of a reliably observed terminal result only.
+
+## 6. UltraWork Skill Discovery Requirement
 
 The runtime acceptance already proved that `/ultrawork` command execution can drive a real autonomous run.
 
 The remaining defect is **Skill discovery/permission consistency**.
 
-### 5.1 Required behavior
+### 6.1 Required behavior
 
 For the Orchestrator in every supported shared-behavior configuration where UltraWork is intended to exist:
 
@@ -277,7 +395,7 @@ ultrawork
 
 The Orchestrator MUST be able to discover and load the UltraWork Skill through the normal bundled Skill discovery path.
 
-### 5.2 Single authority
+### 6.2 Single authority
 
 Prefer a single shared Skill authority.
 
@@ -285,7 +403,7 @@ Do not create profile-specific copies of the UltraWork Skill.
 
 If presets own independent Skill allowlists, every relevant Orchestrator preset MUST receive the shared capability consistently, with regression coverage preventing drift.
 
-### 5.3 Non-regression
+### 6.3 Non-regression
 
 Fixing UltraWork discovery MUST NOT remove or shadow:
 
@@ -296,13 +414,20 @@ Fixing UltraWork discovery MUST NOT remove or shadow:
 - `clonedeps`;
 - other currently intended bundled Orchestrator Skills.
 
+### 6.4 Explicit skill-policy authority
+
+Explicit user Skill policy remains authoritative. UltraWork must be
+discoverable when normal/default policy permits it, a wildcard permits it, or
+it is explicitly included. An explicit allowlist that omits `ultrawork` may
+hide it; Slim MUST NOT silently bypass that user permission intent.
+
 ---
 
-## 6. Hashline Runtime Availability Requirement
+## 7. Hashline Runtime Availability Requirement
 
 Hashline is a required **available capability** of the completed V1, while remaining optional in packaging/default configuration.
 
-### 6.1 Config classification first
+### 7.1 Config classification first
 
 Before any code change, determine the resolved runtime value of:
 
@@ -320,7 +445,7 @@ Classify the prior acceptance result as one of:
 
 Do not treat a deliberately disabled optional feature as a code failure.
 
-### 6.2 Controlled acceptance mode
+### 7.2 Controlled acceptance mode
 
 For final V1 acceptance, enable:
 
@@ -332,7 +457,7 @@ through the normal Slim configuration authority.
 
 Ensure the exact compatible optional peer required by current repository authority is resolvable from the actual loaded Slim runtime.
 
-### 6.3 Real host read annotation
+### 7.3 Real host read annotation
 
 With Hashline enabled and the peer installed, a real native OpenCode file `read` MUST preserve native rendering and add a Hashline anchor:
 
@@ -342,7 +467,7 @@ With Hashline enabled and the peer installed, a real native OpenCode file `read`
 
 The anchor MUST correspond to the normalized full-file snapshot and the actual seen line range.
 
-### 6.4 Real host edit
+### 7.4 Real host edit
 
 The dedicated additive `hashline_edit` tool MUST be present in the real session tool set when enabled.
 
@@ -352,7 +477,7 @@ Native `edit` MUST remain independent and valid without a tag.
 
 Native `apply_patch`, where the host exposes it, MUST remain independent and valid without a tag.
 
-### 6.5 Stale-edit rejection
+### 7.5 Stale-edit rejection
 
 The final acceptance MUST prove in a real OpenCode host:
 
@@ -379,7 +504,7 @@ hashline_edit using TAG2
 
 MUST succeed.
 
-### 6.6 Existing file safety remains authoritative
+### 7.6 Existing file safety remains authoritative
 
 Preserve existing verified behavior for:
 
@@ -395,13 +520,13 @@ Do not rewrite the upstream Hashline algorithm.
 
 ---
 
-## 7. Background Specialist Routing and Provider Failure Semantics
+## 8. Background Specialist Routing and Provider Failure Semantics
 
 The previous real acceptance proved that real background dispatch and terminal failure reconciliation work.
 
 It did **not** prove successful Explorer and Oracle model execution because the provider returned `Insufficient balance`.
 
-### 7.1 Required classification
+### 8.1 Required classification
 
 For every child probe, report:
 
@@ -423,7 +548,7 @@ EXTERNAL_PROVIDER_RESOURCE_FAILURE
 
 Do not modify orchestration to hide this condition.
 
-### 7.2 Successful background proof before final acceptance
+### 8.2 Successful background proof before final acceptance
 
 Before V1 can be marked ready for long unattended real-project dogfood, the controlled acceptance environment MUST provide a viable model/provider route and prove at least:
 
@@ -433,7 +558,7 @@ Before V1 can be marked ready for long unattended real-project dogfood, the cont
 
 A terminal provider error is valid evidence for failure handling, but it is not evidence of successful specialist work.
 
-### 7.3 No duplicate dispatch
+### 8.3 No duplicate dispatch
 
 A provider/resource failure MUST NOT cause uncontrolled duplicate respawn.
 
@@ -441,13 +566,13 @@ Existing bounded retry/revive/fallback semantics remain authoritative.
 
 ---
 
-## 8. Real Oracle Requirement
+## 9. Real Oracle Requirement
 
 Oracle dispatch is already proven.
 
 Successful Oracle review remains required.
 
-### 8.1 Minimal proof
+### 9.1 Minimal proof
 
 Use a disposable repository and a small non-trivial diff.
 
@@ -458,7 +583,7 @@ A real Oracle run MUST produce:
 - an actual review result;
 - parent reconciliation of that review result.
 
-### 8.2 UltraWork completion integration
+### 9.2 UltraWork completion integration
 
 A final targeted UltraWork acceptance MUST prove that when Oracle review is required:
 
@@ -476,43 +601,92 @@ UltraWork MUST NOT declare DONE while a required material Oracle result remains 
 
 ---
 
-## 9. Completion and Recovery Requirements
+## 10. Completion, Wake, and Recovery Requirements
 
-Do not build a new completion subsystem.
+Do not build a completion subsystem or state machine. Completion remains the
+composition of existing runtime facts, UltraWork policy, and the mechanical
+acceptance contract.
 
-Use current Slim behavior.
+### 10.1 Completion requirements
 
-### 9.1 Completion requirements
+DONE is prohibited while any applicable condition remains:
 
-Where applicable to the Ticket, DONE requires:
+- WorkIntent is not `complete`;
+- owned TODO/work is unfinished;
+- a required child is active;
+- a required terminal result is unreconciled;
+- a required Oracle result or finding is unresolved;
+- applicable validation is incomplete;
+- a `CAUSED_BY_THIS_CHANGE` failure is unresolved;
+- an `UNKNOWN` state is unresolved;
+- the Git boundary is unknown; or
+- required CI/review status has not been truthfully resolved.
 
-- Ticket-owned implementation complete;
-- owned TODOs complete;
-- targeted tests complete;
-- broader required validation complete;
-- background terminal results reconciled;
-- no unresolved `CAUSED_BY_THIS_CHANGE` failure;
-- no unresolved `UNKNOWN` failure;
-- material Oracle findings resolved or explicitly accepted by repository authority;
-- Git boundary checked;
-- Ticket acceptance criteria satisfied.
+CI/review queueing or dispatch is not PASS. Slim does not own an automatic
+PR, merge, CI, or review state machine. External Git/CI/review facts must be
+recorded truthfully.
 
-### 9.2 Recovery requirements
+### 10.2 Reconciliation wake
 
-Existing behavior remains responsible for:
+When a required child has a reliably observed terminal result that remains
+`terminalUnreconciled`, the parent MAY be woken once so it can consume and
+reconcile that result.
 
-- stopped/unreconciled child classification;
-- task result retrieval;
-- task revive where safe;
-- orchestrator wake on incomplete owned work;
-- restart/rehydration;
-- durable progress reuse.
+This reconciliation wake:
 
-The final phase should verify these surfaces have not regressed, not replace them.
+- is limited to result consumption, not normal autonomous continuation;
+- originates only from the existing coordinator's canonical terminal outcome
+  for `completed`, `error`, or `cancelled`, carrying the existing task ID,
+  generation, parent, terminal state, and result occurrence;
+- is deduplicated by that existing `(task ID, generation, terminal result
+occurrence)` identity, with no second scheduler, job board, or wake ledger;
+- remains subject to the existing real user-wait, fallback, and one-flight
+  protections; it bypasses only the otherwise circular
+  `terminalUnreconciled` continuation predicate for that one consumption;
+- must not require `terminalUnreconciled = false` before waking the parent to
+  reconcile that same result.
+
+`stopped` without a native task result is not a canonical terminal outcome.
+It remains on the existing stopped/unknown recovery path and MUST NOT trigger
+this reconciliation wake. An uncertain or merely inferred child terminal state
+is likewise not a terminal result.
+
+### 10.3 Continuation wake
+
+Normal autonomous continuation is permitted only after all required terminal
+results have been reconciled and all applicable predicates hold:
+
+- WorkIntent is `active`;
+- unfinished owned work exists;
+- no user wait is active;
+- no required child is active;
+- no fallback is active;
+- no terminal reconciliation remains unresolved; and
+- the existing continuation path can make progress.
+
+Existing bounded no-progress behavior remains authoritative. Do not add an
+aggressive OMO-style continuation loop. Human/user wait has higher authority
+than autonomous continuation.
+
+### 10.4 Restart and provider-recovery semantics
+
+Existing behavior remains responsible for stopped/unreconciled child
+classification, task result retrieval, safe task revive, orchestrator wake,
+fallback, historical task rehydration, and durable progress reuse.
+
+| Boundary                    | Required behavior                                                                                                                                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin reload               | Reconstruct WorkIntent, reconstruct historical tasks, query real host runtime state, and do not duplicate dispatch.                                                                                        |
+| Compaction                  | Preserve bounded WorkIntent and bounded task/reconciliation facts; do not rely on discarded free text.                                                                                                     |
+| OpenCode process restart    | Restore only host-verifiable facts. Anything else remains `UNKNOWN` or the appropriate existing stopped/unreconciled classification. Do not infer success or redispatch merely because old history exists. |
+| Provider fallback exhausted | Terminalize through existing semantics; do not fabricate success, retry forever, switch account silently, or mutate credentials/provider configuration.                                                    |
+
+The final phase verifies these surfaces and their integration; it does not
+replace them.
 
 ---
 
-## 10. Real Runtime Acceptance Matrix
+## 11. Real Runtime Acceptance Matrix
 
 The final acceptance MUST be performed in a real OpenCode runtime, not solely via unit tests or integration simulation.
 
@@ -527,47 +701,62 @@ NOT_PROVEN
 
 Never promote UNIT or INTEGRATION_SIMULATION evidence to REAL_RUNTIME.
 
-### 10.1 Required real-runtime checks
+### 11.1 Evidence fixture and capture
 
-The final acceptance matrix MUST include:
+Every acceptance fixture MUST pin the exact OpenCode binary/version, Slim
+candidate SHA, PTY/interactive host context, session ID, and relevant
+logs/artifacts. The OpenCode version pin is an acceptance-fixture
+reproducibility requirement, not a permanent production compatibility lock.
 
-| Capability | Required result |
-| --- | --- |
-| OpenCode host runtime | PASS |
-| Slim plugin loading | PASS |
-| Profile/preset/override reporting | PASS |
-| `/slim-go` availability | PASS |
-| `/slim-ag` availability | PASS |
-| `/slim-profile` availability | PASS |
-| `/deepwork` regression | PASS |
-| `/loop` regression | PASS |
-| `/ultrawork` command | PASS |
-| UltraWork Skill discovery | PASS |
-| Real UltraWork execution | PASS |
-| Agent-created progress artifact | YES |
-| Verification planning | YES |
-| Successful real Explorer | PASS |
-| Explorer result reconciliation | PASS |
-| Successful real Oracle | PASS |
-| Oracle result reconciliation | PASS |
-| Implementation | PASS |
-| Targeted tests | PASS |
-| Broader applicable validation | PASS |
-| Completion waits for required Oracle | PASS |
-| Human interventions | 0 for bounded acceptance Ticket |
-| Hashline tool presence when enabled | PASS |
-| Native read Hashline annotation | PASS |
-| Valid Hashline edit | PASS |
-| Stale tag rejection | PASS |
-| Stale operation mutates file | NO |
-| Reread/reanchor recovery | PASS |
-| Native edit unaffected | PASS |
-| Native apply_patch unaffected | PASS or NOT_AVAILABLE |
-| Restart/resume non-regression | PASS |
-| Git boundary | PASS |
-| Credentials modified | NO |
+For each matrix case record trigger, expected state, actual state, duplicate
+dispatch (`YES`/`NO`), whether human input was required, and evidence level.
 
-### 10.2 Acceptance Ticket
+### 11.2 Minimum fault-injection matrix
+
+The final REAL_RUNTIME acceptance includes at least:
+
+|   # | Case                                                               |
+| --: | ------------------------------------------------------------------ |
+|   1 | Parent idle with active WorkIntent.                                |
+|   2 | Idle while WorkIntent is `waiting_for_user`.                       |
+|   3 | Compaction during unfinished work and child activity.              |
+|   4 | Plugin reload and historical reconstruction.                       |
+|   5 | Child idle without a proven terminal result.                       |
+|   6 | Duplicate lifecycle events and stale generation.                   |
+|   7 | Configured fallback after retryable provider failure.              |
+|   8 | Auth/provider failure or fallback exhaustion terminalization.      |
+|   9 | Stalled background task, bounded supervisor, and safe revive.      |
+|  10 | Large tool output with truncation and compaction.                  |
+|  11 | Refusal to DONE with unfinished, unreconciled, or `UNKNOWN` state. |
+|  12 | Truthful Git/CI/review handoff.                                    |
+|  13 | Real successful Explorer result and reconciliation.                |
+|  14 | Real successful Oracle result and reconciliation.                  |
+|  15 | Hashline valid/stale/reanchor real-host sequence.                  |
+|  16 | Bounded zero-human-intervention UltraWork acceptance Ticket.       |
+
+The matrix must additionally show PASS for Slim plugin loading, profile/preset/
+override reporting, `/slim-go`, `/slim-ag`, `/slim-profile`, `/deepwork`,
+`/loop`, `/ultrawork`, UltraWork Skill discovery, normal native edit behavior,
+and applicable validation. It must record credentials modified as `NO`.
+
+### 11.3 Mandatory WorkIntent outcome assertions
+
+The WorkIntent cases in the matrix MUST assert these concrete outcomes:
+
+- an `active` WorkIntent permits one normal wake only when every Section 10.3
+  predicate holds, and produces no duplicate dispatch;
+- after compaction or reload, `waiting_for_user` produces no `promptAsync` or
+  dispatch until normal processing of a real user message results in a new,
+  canonical `active` record;
+- a malformed, conflicting, truncated, or foreign latest candidate reconstructs
+  to `UNKNOWN`, falls back to no older record, and produces no normal
+  continuation;
+- `stopped` without a native terminal result produces no reconciliation wake;
+- a canonical unreconciled terminal result produces exactly one reconciliation
+  wake per existing terminal-result occurrence, consumes/reconciles the result,
+  and only then permits any separately eligible normal continuation.
+
+### 11.4 Acceptance Ticket
 
 The final real UltraWork Ticket SHOULD remain bounded and disposable.
 
@@ -587,7 +776,7 @@ Hashline stale-edit chaos SHOULD remain a separate real-host check rather than b
 
 ---
 
-## 11. Test Requirements
+## 12. Test Requirements
 
 Implementation tickets MUST add only tests justified by concrete changed behavior.
 
@@ -602,6 +791,18 @@ At minimum, the final codebase needs regression coverage for:
 7. Existing Loop tests remain green.
 8. Existing background orchestration tests remain green.
 9. Release artifact verification remains green.
+10. WorkIntent parser accepts only a canonical bounded, current-session
+    envelope; enforces origin/session provenance and all fixed limits; and uses
+    host ordering without a timestamp/revision field.
+11. The latest malformed, conflicting, truncated, or foreign WorkIntent
+    candidate yields `UNKNOWN` with no fallback to an older record.
+12. Compaction and plugin/session reload reconstruct valid WorkIntent without
+    dispatching work; `waiting_for_user` suppresses normal wake after reload.
+13. Normal wake permits an `active` WorkIntent only when existing predicates
+    hold, while a canonical terminal result can issue its narrow reconciliation
+    wake exactly once; `stopped` without a native result cannot issue it.
+14. WorkIntent never independently derives DONE or `blocked`; existing
+    completion/blocking authority must precede its record.
 
 Required validation before final review:
 
@@ -614,7 +815,10 @@ bun test <targeted/affected tests>
 bun test
 ```
 
-If the applicable full suite has environment-dependent or pre-existing failures, every failure must be classified:
+Existing `check:ci` failures MUST be classified before broad remediation. Only
+current V1-owned failures and failures that genuinely block final acceptance
+may be fixed. If the applicable full suite has environment-dependent or
+pre-existing failures, every failure must be classified:
 
 - `CAUSED_BY_THIS_CHANGE`;
 - `PRE_EXISTING`;
@@ -625,7 +829,7 @@ No unresolved `CAUSED_BY_THIS_CHANGE` or `UNKNOWN` failure is acceptable for com
 
 ---
 
-## 12. Cache-Safety Requirement
+## 13. Cache-Safety Requirement
 
 Any implementation affecting agent prompts, tool surfaces, Skill discovery, configuration composition, or outgoing request payloads MUST respect `AGENTS.md` prompt-cache safety rules.
 
@@ -637,7 +841,7 @@ This phase should prefer configuration/registry wiring changes over new prompt m
 
 ---
 
-## 13. Documentation Requirements
+## 14. Documentation Requirements
 
 After runtime behavior is mechanically proven, update documentation to distinguish clearly:
 
@@ -652,7 +856,7 @@ Do not document a capability as real-runtime PASS based only on source inspectio
 
 ---
 
-## 14. Non-Goals
+## 15. Non-Goals
 
 This specification does NOT authorize:
 
@@ -661,6 +865,9 @@ This specification does NOT authorize:
 - replacement of Deepwork;
 - replacement of Loop;
 - new persistence storage;
+- a WorkIntent JSON file, filesystem ledger, database, service, checkpoint
+  store, file-lock protocol, garbage collector, or custom record-freshness
+  sequence;
 - new recovery state machine;
 - new background scheduler;
 - new completion manager;
@@ -676,11 +883,14 @@ This specification does NOT authorize:
 
 ---
 
-## 15. Ticket Decomposition Contract
+## 16. Ticket Decomposition Contract
 
-`/toticket` MUST decompose this specification into the smallest dependency-correct Tickets that can be independently implemented, tested, reviewed, and accepted.
+`/toticket` MUST decompose this specification into dependency-correct Tickets
+that a lower-cost executor such as GPT-5.6 Luna can execute without having to
+redesign the system. The old V2.1 graph is reference material only; this graph
+must be decomposed from this frozen specification.
 
-### 15.1 Required decomposition principles
+### 16.1 Required decomposition principles
 
 Tickets MUST:
 
@@ -696,9 +906,32 @@ Tickets MUST:
 - define targeted tests and real-runtime evidence where required;
 - specify files/areas likely owned without freezing implementation details prematurely.
 
-### 15.2 Expected decomposition shape
+Every Ticket MUST explicitly contain:
 
-The ticket graph will likely need independent lanes for concepts such as:
+```text
+IDENTITY: ID, title, Wave, risk, execution class
+AUTHORITY: exact Spec sections and prior decisions/invariants
+OBJECTIVE
+PRECONDITIONS: blocked_by, required prior state/SHA/runtime prerequisites
+IN SCOPE / OUT OF SCOPE
+LIKELY FILES / OWNERSHIP SURFACES
+CURRENT BEHAVIOR / REQUIRED BEHAVIOR
+IMPLEMENTATION CONSTRAINTS / FAILURE SEMANTICS
+NUMBERED ACCEPTANCE CRITERIA
+TEST PLAN / DETERMINISTIC VALIDATION
+REAL-RUNTIME EVIDENCE, when applicable
+GIT BOUNDARY / NON-INTERFERENCE REQUIREMENTS
+DEFINITION OF DONE / HANDOFF-REVIEW PACKET
+MODEL ROUTING: recommended model, reasoning effort, reason, work type
+```
+
+`NO_CODE_CHANGE` is a valid Ticket outcome. Avoid both artificial micro-Tickets
+and giant diagnosis-plus-implementation-plus-acceptance Tickets.
+
+### 16.2 Expected decomposition shape
+
+The graph must include code-change, diagnosis, runtime-proof, and final
+acceptance Tickets. It will likely need independent lanes for concepts such as:
 
 - runtime authority/profile/preset/override diagnosis and reporting;
 - UltraWork Skill discovery wiring;
@@ -710,9 +943,16 @@ This list is a decomposition hint, **not a required Ticket list**.
 
 `/toticket` should consolidate or split these only when repository dependency boundaries justify it.
 
-### 15.3 Ticket review gate
+### 16.3 Ticket review gate
 
-After `/toticket` produces the Ticket graph:
+After `/toticket`, independently review the graph for Spec coverage, no
+invented or missing requirements, boundary clarity, non-overlapping ownership,
+a valid DAG, mechanical acceptance, lower-cost executor clarity, preservation
+of the no-new-orchestration invariant, and final Definition-of-Done coverage.
+Repair graph-only defects autonomously. Return to the user only if repair
+would require changing frozen product semantics or this specification.
+
+Then:
 
 ```text
 STOP
@@ -720,13 +960,12 @@ STOP
 
 Do not implement any Ticket.
 
-Return the decomposition for independent ChatGPT review.
-
-Implementation may begin only after the user receives an explicit review verdict approving the Ticket graph.
+Implementation may begin only after the user receives an explicit review
+verdict approving the frozen Ticket graph.
 
 ---
 
-## 16. Definition of Done
+## 17. Definition of Done
 
 Slim Unattended Reliability V1 is complete only when all of the following are true:
 
@@ -783,7 +1022,7 @@ SAFE_TO_MERGE: NO
 
 ---
 
-## 17. Required `/toticket` Output
+## 18. Required `/toticket` Output
 
 The decomposition should return a review packet containing at least:
 
@@ -794,7 +1033,7 @@ Spec:
 docs/planning/SLIM_RUNTIME_WIRING_ACCEPTANCE_SPEC_V1.md
 
 Spec status:
-DRAFT — TICKET DECOMPOSITION AUTHORITY
+APPROVED — FROZEN FOR TICKET DECOMPOSITION
 
 Tickets:
 - <ID>
