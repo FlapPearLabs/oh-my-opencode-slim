@@ -97,7 +97,6 @@ async function withTimeout<T>(
         timer = setTimeout(() => {
           reject(new Error('Session status lookup timed out'));
         }, timeoutMs);
-        timer.unref?.();
       }),
     ]);
   } finally {
