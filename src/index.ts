@@ -445,7 +445,33 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       sessionLifecycle,
     );
 
-    profileCommandsHook = createProfileCommandsHook(Object.keys(agents));
+    // Capture the orchestrator's factory-layer model once, before the config
+    // hook's profile pass mutates the agent registry in place, so /slim-profile
+    // can report the AGENT_FACTORY layer of the §4.3 precedence chain.
+    const factoryOrchestratorModel =
+      typeof agents.orchestrator?.model === 'string'
+        ? (agents.orchestrator.model as string)
+        : undefined;
+
+    profileCommandsHook = createProfileCommandsHook(Object.keys(agents), {
+      getPresetName: () => runtime.preset,
+      getHostAgentModel: (name) => {
+        const model = runtime.hostAgent(name)?.model;
+        return typeof model === 'string' ? model : undefined;
+      },
+      getPresetOrchestratorModel: () => {
+        const presetName = runtime.preset;
+        if (!presetName) return undefined;
+        const model = config.presets?.[presetName]?.orchestrator?.model;
+        if (typeof model === 'string') return model;
+        if (Array.isArray(model) && model.length > 0) {
+          const first = model[0];
+          return typeof first === 'string' ? first : first?.id;
+        }
+        return undefined;
+      },
+      getFactoryOrchestratorModel: () => factoryOrchestratorModel,
+    });
     deepworkCommandHook = createDeepworkCommandHook();
     reflectCommandHook = createReflectCommandHook();
     loopCommandHook = createLoopCommandHook();

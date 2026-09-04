@@ -567,6 +567,95 @@ describe('plugin config model inheritance', () => {
       await hooks.dispose?.();
     }
   });
+
+  test('URV1-04A /slim-go preserves a host override on disk and reports retention through the real plugin', async () => {
+    const hooks = await loadConfiguredPlugin({});
+    const configDir = configDirs[configDirs.length - 1] as string;
+    await Bun.write(
+      `${configDir}/opencode.json`,
+      JSON.stringify({
+        agent: {
+          orchestrator: { model: 'user/custom-model' },
+          unrelated: { model: 'survives' },
+        },
+      }),
+    );
+
+    try {
+      const output = { parts: [] as any[] };
+      await (
+        hooks as unknown as {
+          'command.execute.before': (
+            input: { command: string; sessionID: string; arguments: string },
+            output: { parts: Array<{ type: string; text?: string }> },
+          ) => Promise<void>;
+        }
+      )['command.execute.before'](
+        { command: 'slim-go', sessionID: '1', arguments: '' },
+        output,
+      );
+
+      expect(output.parts[0].text).toContain(
+        'Slim profile staged: opencode-go',
+      );
+      expect(output.parts[0].text).toContain(
+        'Host model override preserved for: orchestrator',
+      );
+
+      const onDisk = JSON.parse(
+        await Bun.file(`${configDir}/opencode.json`).text(),
+      );
+      expect(onDisk.agent.orchestrator.model).toBe('user/custom-model');
+      expect(onDisk.agent.unrelated.model).toBe('survives');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('URV1-04A /slim-profile reports six authority values through the real plugin wiring (host override wins)', async () => {
+    const hooks = await loadConfiguredPlugin({
+      preset: 'prod',
+      presets: {
+        prod: {
+          orchestrator: { model: 'preset/orchestrator' },
+          designer: { model: 'preset/designer' },
+        },
+      },
+    });
+
+    const hostConfig: Record<string, unknown> = {
+      agent: {
+        orchestrator: { model: 'user/custom-model' },
+      },
+    };
+
+    try {
+      await hooks.config?.(hostConfig);
+
+      const output = { parts: [] as any[] };
+      await (
+        hooks as unknown as {
+          'command.execute.before': (
+            input: { command: string; sessionID: string; arguments: string },
+            output: { parts: Array<{ type: string; text?: string }> },
+          ) => Promise<void>;
+        }
+      )['command.execute.before'](
+        { command: 'slim-profile', sessionID: '1', arguments: '' },
+        output,
+      );
+
+      const text = output.parts[0].text;
+      expect(text).toContain('MODEL_PROFILE_ACTIVE: opencode-go');
+      expect(text).toContain('MODEL_PROFILE_STAGED: opencode-go');
+      expect(text).toContain('PRESET: prod');
+      expect(text).toContain('HOST_ORCHESTRATOR_OVERRIDE: user/custom-model');
+      expect(text).toContain('RESOLVED_ORCHESTRATOR_MODEL: user/custom-model');
+      expect(text).toContain('RESOLUTION_AUTHORITY: HOST');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
 });
 
 describe('multiplexer host gating', () => {
