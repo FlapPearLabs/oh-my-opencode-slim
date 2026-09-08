@@ -457,6 +457,7 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
 
   test('(c) system/messages transforms + chat.message run on the same event', async () => {
     const chatCalls: Array<{ sessionID: string; agent?: string }> = [];
+    const messageTransformInputs: unknown[] = [];
     const handler = createSessionContextHandler({
       interviewHandleContext: async () => {},
       chatMessage: async (input) => {
@@ -465,7 +466,8 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
       systemTransform: async (_input, output) => {
         output.system.push('INJECTED');
       },
-      messagesTransform: async (_input, output) => {
+      messagesTransform: async (input, output) => {
+        messageTransformInputs.push(input);
         output.messages[0]?.parts.push({ type: 'text', text: 'APPENDED' });
       },
     });
@@ -484,6 +486,7 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
     expect(chatCalls).toEqual([
       { sessionID: 'ses_cmd', agent: 'orchestrator' },
     ]);
+    expect(messageTransformInputs).toEqual([{ sessionID: 'ses_cmd' }]);
     expect(event.system).toEqual([
       { type: 'text', text: 'base' },
       { type: 'text', text: 'INJECTED' },

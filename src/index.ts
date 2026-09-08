@@ -64,6 +64,7 @@ import {
   createTaskStatusTool,
   createWaitForUserTool,
   createWebfetchTool,
+  createWorkIntentTool,
 } from './tools';
 import { pickAgentModelRef } from './tools/smartfetch/secondary-model';
 import {
@@ -89,6 +90,7 @@ import { isPluginDisabledByEnv } from './utils/env';
 import { initLogger, log } from './utils/logger';
 import { SessionMetadataStore } from './utils/session-metadata';
 import { collapseSystemInPlace } from './utils/system-collapse';
+import { WorkIntentAdapter } from './utils/work-intent';
 import { createV2Setup } from './v2';
 
 /**
@@ -274,6 +276,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let taskStatusTools: ReturnType<typeof createTaskStatusTool>;
   const taskActivityTracker = new TaskActivityTracker();
   let waitForUserTools: ReturnType<typeof createWaitForUserTool>;
+  let workIntentTools: ReturnType<typeof createWorkIntentTool>;
+  let workIntentAdapter: WorkIntentAdapter;
   let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
   let tools: Record<string, ToolDefinition>;
@@ -425,6 +429,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
 
     sessionLifecycle = new SessionLifecycle(log);
+    workIntentAdapter = new WorkIntentAdapter({
+      directory: ctx.directory,
+      messages: async (request) => {
+        const response = await ctx.client.session.messages(request);
+        return { data: (response.data ?? []) as unknown[] };
+      },
+    });
+    sessionLifecycle.onSessionDeleted((sessionID) => {
+      workIntentAdapter.clear(sessionID);
+    });
 
     // Initialize auto-update checker hook
     autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
@@ -608,6 +622,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         runtime.backgroundJobs.orchestratorWake.enabled &&
         backgroundJobCoordinator.hasRunning(sessionID),
     });
+    workIntentTools = createWorkIntentTool({
+      shouldManageSession: (sessionID) =>
+        sessionMetadata.getAgent(sessionID) === 'orchestrator',
+      resolveAgentName: (agent) => resolveRuntimeAgentName(runtime, agent),
+      registerSessionAsOrchestrator: (sessionID) => {
+        sessionMetadata.setAgent(sessionID, 'orchestrator');
+      },
+    });
 
     const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
     const shouldRegisterHashlineEdit = runtime.hashline_edit === true;
@@ -618,6 +640,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...taskReviveTools,
       ...taskStatusTools,
       ...waitForUserTools,
+      ...workIntentTools,
       ...acpRunTools,
       ...(shouldRegisterWebfetch ? { webfetch } : {}),
       ...(shouldRegisterHashlineEdit
@@ -1434,10 +1457,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Inject phase reminder and filter available skills before sending to
     // API (doesn't show in UI)
     'experimental.chat.messages.transform': async (
-      input: Record<string, never>,
+      input: { sessionID?: string },
       output: { messages: unknown[] },
     ): Promise<void> => {
       const typedOutput = output as { messages: MessageWithParts[] };
+
+      await workIntentAdapter.reconstructTransform(
+        typedOutput.messages,
+        input.sessionID,
+      );
 
       for (const message of typedOutput.messages) {
         if (!isMessageWithParts(message)) {
@@ -1507,7 +1535,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         typedOutput as never,
       );
-      await taskSessionManagerHook.injectBackgroundJobBoard(input, typedOutput);
+      await taskSessionManagerHook.injectBackgroundJobBoard(
+        input as never,
+        typedOutput,
+      );
+    },
+
+    'experimental.session.compacting': async (input: {
+      sessionID: string;
+    }): Promise<void> => {
+      workIntentAdapter.invalidateForCompaction(input.sessionID);
     },
 
     'tool.execute.after': async (input, output) => {

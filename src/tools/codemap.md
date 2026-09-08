@@ -4,7 +4,7 @@
 
 Centralized tool factory and registry for the OpenCode plugin system. This directory defines all executable tools exposed to OpenCode agents, including:
 
-- **Task lifecycle tools**: Background task communication, cancellation, status (with live-status policy), results, revival, and HITL continuation control
+- **Task lifecycle tools**: Background task communication, cancellation, status (with live-status policy), results, revival, HITL continuation control, and bounded WorkIntent recording
 - **Code intelligence tools**: AST-grep pattern matching and transformation across languages
 - **Web capabilities**: Smart web fetching with caching and secondary model processing
 - **ACP integration**: External agent protocol execution
@@ -27,7 +27,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 | Tool Family | Purpose | Key Components |
 |------------|---------|----------------|
-| **Task Management** | Background task communication, cancellation, status, results, revival, and HITL continuation control | `task-message.ts`, `cancel-task.ts`, `task-status.ts`, `task-result.ts`, `task-revive.ts`, `wait-for-user.ts` |
+| **Task Management** | Background task communication, cancellation, status, results, revival, HITL continuation control, and bounded WorkIntent recording | `task-message.ts`, `cancel-task.ts`, `task-status.ts`, `task-result.ts`, `task-revive.ts`, `wait-for-user.ts`, `work-intent.ts` |
 | **Task Policy & Activity** | Shared live-status policy and activity tracking consumed by `task_status` and event wiring | `task-policy.ts` (`summarizeTaskStatus`), `task-activity.ts` (`TaskActivityTracker`) |
 | **ACP Integration** | External agent protocol execution | `acp-run.ts`, ACP client implementation |
 | **Code Intelligence** | AST-based code manipulation | `ast-grep/` directory, `tools.ts` |
@@ -103,6 +103,18 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
        ├─> Revokes pending automatic-continuation reservations
        └─> Returns the versioned waiting_for_user protocol marker
 ```
+
+### WorkIntent Recording Flow
+
+```
+1. Orchestrator invokes slim_work_intent after existing authority determines state
+   ├─> Validates orchestrator session ownership and fixed field bounds
+   ├─> Returns one canonical session-bound slim.work-intent.v1 JSON envelope
+   └─> OpenCode persists that completed tool result in the current session history
+```
+
+The tool records objective continuity only. It does not infer completion or
+blocking, schedule work, dispatch tasks, or wake a session.
 
 ### Task Status Policy Flow
 

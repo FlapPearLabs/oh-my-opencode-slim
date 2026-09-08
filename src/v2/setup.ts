@@ -265,7 +265,10 @@ export function createSessionContextHandler(
           info: m,
           parts: m.content,
         }));
-        await deps.messagesTransform({}, { messages: v1messages });
+        await deps.messagesTransform(
+          { sessionID: event.sessionID },
+          { messages: v1messages },
+        );
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown };
           info.content = m.parts;

@@ -5,6 +5,7 @@
 Centralized utilities and shared abstractions used across the oh-my-opencode-slim plugin. This folder provides:
 - Background job lifecycle management (board + store + coordinator + supervisor)
 - Live session-status reads and session metadata tracking
+- Bounded WorkIntent reconstruction from OpenCode session history
 - In-process opencode client access and client call-shape contracts
 - Environment and configuration utilities
 - Type guards and validation helpers
@@ -28,6 +29,8 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 - **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map once per observation (5s bounded timeout). It distinguishes a valid absent session (`idle`) from malformed data or lookup failure (`unknown`) so lifecycle policy never treats schema drift as completion.
 
 - **Session Metadata** (`session-metadata.ts`): `SessionMetadataStore` — bounded session → agent/directory map with LRU eviction that never evicts active orchestrator sessions.
+
+- **WorkIntent** (`work-intent.ts`): Strict parser and bounded in-memory view for the latest canonical `slim.work-intent.v1` completed tool result in host message order. It reconstructs through the existing message transform and session-history API, yields `UNKNOWN` on invalid or inconsistent latest state without fallback, and owns no persistence, scheduler, dispatch, or completion logic.
 
 - **Opencode Client** (`opencode-client.ts`): `getClient(input)` returns the in-process host client (no loopback HTTP, no caching).
 
@@ -160,4 +163,5 @@ re-exported).
 | `session.ts` | Session timeout, abort, and extraction utilities |
 | `system-collapse.ts` | System message collapsing utility |
 | `task.ts` | Task output parsing utilities |
+| `work-intent.ts` | Canonical WorkIntent envelope validation and bounded history reconstruction |
 | `zip-extractor.ts` | Cross-platform zip extraction |

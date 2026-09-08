@@ -47,7 +47,8 @@ v2 registrations. v1 behavior is unchanged.
      submit)
    - `/interview` command via the interview bridge's own registration
    - a single `ctx.session.hook("context")` handles the system/messages
-     transforms (SystemPart[]/Message.content ↔ v1 `{info,parts}` conversion +
+   transforms (SystemPart[]/Message.content ↔ v1 `{info,parts}` conversion,
+     including the event `sessionID` required by session-bound reconstruction +
      `rewritePromptForV2`), `chat.message` agent tracking, and interview +
      generic command marker dispatch (whole-text-anchored markers recovered
      from the trailing user message and routed to the v1
@@ -103,6 +104,10 @@ expanding the global v2 client surface.
   user prompt and the session context hook dispatches it to the v1
   `command.execute.before` hook, mutating only the trailing message (same
   cache-preserving rule as the interview bridge).
+- **Session-bound message transforms.** The context bridge passes the v2 event
+  `sessionID` into the reused v1 message-transform hook. This preserves strict
+  current-session provenance for WorkIntent reconstruction even when v2 message
+  objects omit a per-message session field.
 - **Capability guard.** Hosts invoking `setup()` with a reduced/TUI-side ctx
   (no `agent.transform`) are skipped gracefully instead of crashing.
 - **Shared session submit.** A single `session-submit.ts` helper submits
