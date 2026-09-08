@@ -30,7 +30,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 - **Session Metadata** (`session-metadata.ts`): `SessionMetadataStore` — bounded session → agent/directory map with LRU eviction that never evicts active orchestrator sessions.
 
-- **WorkIntent** (`work-intent.ts`): Strict parser and bounded in-memory view for the latest canonical `slim.work-intent.v1` completed tool result in host message order. It reconstructs through the existing message transform and session-history API, yields `UNKNOWN` on invalid or inconsistent latest state without fallback, and owns no persistence, scheduler, dispatch, or completion logic.
+- **WorkIntent** (`work-intent.ts`): Strict parser and bounded in-memory view for the latest canonical `slim.work-intent.v1` completed tool result in host message order. It reconstructs through the existing message transform and session-history API, uses one in-process invalidation token so an in-flight pre-compaction read cannot restore stale state, yields `UNKNOWN` on invalid or inconsistent latest state without fallback, and owns no persistence, scheduler, dispatch, or completion logic.
 
 - **Opencode Client** (`opencode-client.ts`): `getClient(input)` returns the in-process host client (no loopback HTTP, no caching).
 

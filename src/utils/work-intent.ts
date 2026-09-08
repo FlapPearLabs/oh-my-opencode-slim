@@ -274,6 +274,7 @@ export class WorkIntentAdapter {
   readonly #directory: string | undefined;
   readonly #maxSessions: number;
   readonly #views = new Map<string, ReconstructedWorkIntent>();
+  #historyEpoch = Symbol('work-intent-history-epoch');
 
   constructor(options: WorkIntentAdapterOptions) {
     this.#messages = options.messages;
@@ -291,6 +292,7 @@ export class WorkIntentAdapter {
 
   /** The host hook runs before compaction, so its view cannot remain authoritative. */
   invalidateForCompaction(sessionID: string): void {
+    this.#historyEpoch = Symbol('work-intent-history-epoch');
     this.clear(sessionID);
   }
 
@@ -311,11 +313,15 @@ export class WorkIntentAdapter {
   async reconstructSession(
     sessionID: string,
   ): Promise<ReconstructedWorkIntent> {
+    const historyEpoch = this.#historyEpoch;
     try {
       const response = await this.#messages({
         path: { id: sessionID },
         ...(this.#directory ? { query: { directory: this.#directory } } : {}),
       });
+      if (historyEpoch !== this.#historyEpoch) {
+        return { status: 'unknown' };
+      }
       return this.#remember(
         sessionID,
         reconstructWorkIntent(response.data ?? [], sessionID),

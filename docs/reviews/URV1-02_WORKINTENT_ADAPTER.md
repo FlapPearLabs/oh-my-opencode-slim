@@ -142,6 +142,14 @@ The implementation was driven through focused red/green slices:
    envelope, and invokes the existing v1 invalidation callback before other
    event consumers. Unknown or malformed events do nothing. No compaction
    manager or new event subsystem was added.
+9. WorkBuddy Pro and Antigravity independently identified a narrow race in
+   which an already in-flight pre-compaction history read could resolve after
+   invalidation and restore stale `known` state. A deterministic deferred-read
+   regression first returned `known`. The adapter now rotates one ephemeral,
+   process-local invalidation token at the compaction boundary; a history read
+   crossing that boundary returns `UNKNOWN` and cannot write its result into
+   the bounded view. This token is not persisted, serialized, session state, a
+   timestamp, or a record-order version.
 
 No adjacent production behavior was refactored.
 
@@ -149,9 +157,9 @@ No adjacent production behavior was refactored.
 
 | Validation | Result |
 | --- | --- |
-| Focused WorkIntent/tool/v2/plugin tests | `63 pass / 0 fail / 158 expect()` |
+| Focused WorkIntent/tool/v2/plugin tests | `64 pass / 0 fail / 160 expect()` |
 | Cache-safety properties, snapshots, and tripwire | `17 pass / 0 fail / 3 snapshots / 32 expect()` |
-| Full test suite | `2441 pass / 0 fail / 3 snapshots / 6197 expect()` across 146 files |
+| Full test suite | `2442 pass / 0 fail / 3 snapshots / 6199 expect()` across 146 files |
 | `bun run typecheck` | exit 0 |
 | `bun run build` | exit 0 |
 | `bun run verify:release` | exit 0; packed install/import verification passed |
@@ -174,6 +182,8 @@ was restored; the final diff does not delete or modify the artifact.
   The first post-compaction transform therefore reconstructs from current host
   history when its visible messages omit the carrier. If the carrier was
   compacted away, the result is `UNKNOWN`.
+- An in-flight history read that crosses any compaction boundary is discarded
+  as `UNKNOWN`; a later carrier-free transform can perform a fresh host read.
 - Ordinary carrier-free transforms do not repeat the same history read for an
   already reconstructed session; compaction is the explicit invalidation
   boundary.

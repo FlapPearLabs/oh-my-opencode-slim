@@ -324,6 +324,24 @@ describe('WorkIntent reconstruction lifecycle', () => {
     expect(adapter.get(SESSION_ID)).toEqual({ status: 'unknown' });
   });
 
+  test('compaction invalidation wins over an in-flight pre-compaction history read', async () => {
+    const rendered = createWorkIntentEnvelope(SESSION_ID, input());
+    let resolveHistory!: (value: { data: unknown[] }) => void;
+    const history = new Promise<{ data: unknown[] }>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const adapter = new WorkIntentAdapter({
+      messages: async () => history,
+    });
+
+    const pending = adapter.reconstructSession(SESSION_ID);
+    adapter.invalidateForCompaction(SESSION_ID);
+    resolveHistory({ data: [message('msg_1', [toolPart(rendered)])] });
+
+    expect(await pending).toEqual({ status: 'unknown' });
+    expect(adapter.get(SESSION_ID)).toEqual({ status: 'unknown' });
+  });
+
   test('uses the v2 context session binding when messages omit sessionID', async () => {
     const rendered = createWorkIntentEnvelope(SESSION_ID, input());
     const adapter = new WorkIntentAdapter({
