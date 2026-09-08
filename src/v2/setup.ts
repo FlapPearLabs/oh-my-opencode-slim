@@ -13,6 +13,7 @@ import { loadPluginConfig } from '../config/loader';
 import { InterviewConfigSchema } from '../config/schema';
 import { OhMyOpenCodeLite } from '../index';
 import type { McpConfig } from '../mcp/types';
+import { isRecord } from '../utils/guards';
 import { initLogger, log } from '../utils/logger';
 import { adaptTool, applyAgentToDraft } from './adapters';
 import { buildPluginInput, resolveV2Directory } from './client-shim';
@@ -46,6 +47,38 @@ export type V1CommandBeforeHook = (
     }>;
   },
 ) => Promise<void>;
+
+/** v1 pre-compaction hook reused by the v2 event bridge. */
+export type V1SessionCompactingHook = (input: {
+  sessionID: string;
+}) => Promise<void>;
+
+/**
+ * Invalidate stateful v1 hook views when the native v2 runner starts
+ * compaction. Unknown event shapes stay fail-closed and do not invent a
+ * session identity.
+ */
+export async function dispatchV2CompactionStarted(
+  event: Record<string, unknown>,
+  compacting?: V1SessionCompactingHook,
+): Promise<boolean> {
+  const sessionID =
+    typeof event.sessionID === 'string'
+      ? event.sessionID
+      : isRecord(event.properties) &&
+          typeof event.properties.sessionID === 'string'
+        ? event.properties.sessionID
+        : undefined;
+  if (
+    !compacting ||
+    event.type !== 'session.next.compaction.started' ||
+    !sessionID
+  ) {
+    return false;
+  }
+  await compacting({ sessionID });
+  return true;
+}
 
 /** v1 command hook part shape. */
 type V1CommandPart = {
@@ -699,7 +732,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const eventHook = v1Hooks.event as
         | ((i: { event: Record<string, unknown> }) => Promise<void>)
         | undefined;
-      if (eventHook || interviewBridge) {
+      const sessionCompacting = v1Hooks['experimental.session.compacting'] as
+        | V1SessionCompactingHook
+        | undefined;
+      if (eventHook || interviewBridge || sessionCompacting) {
         const iter = ctx.event.subscribe();
         const eventIterator = iter[Symbol.asyncIterator]();
         let eventStopped = false;
@@ -709,6 +745,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               const next = await eventIterator.next();
               if (next.done) break;
               try {
+                try {
+                  await dispatchV2CompactionStarted(
+                    next.value,
+                    sessionCompacting,
+                  );
+                } catch (err) {
+                  log(
+                    '[v2] compaction invalidation bridge failed',
+                    String(err),
+                  );
+                }
                 // interviewBridge keeps the RAW v2 event; the v1 eventHook
                 // loop iterates raw + synthesized v1 shapes (idle,
                 // early-registration created, message.updated telemetry).

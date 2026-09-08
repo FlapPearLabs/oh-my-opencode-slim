@@ -69,7 +69,9 @@ consumption remains exclusively URV1-03 scope.
   injecting prompt content.
 - `src/v2/setup.ts`: passes the already-available v2 context event `sessionID`
   into the reused v1 message-transform hook so current-session provenance
-  remains enforceable when v2 message objects omit it.
+  remains enforceable when v2 message objects omit it, and maps the native
+  `session.next.compaction.started` event to the same bounded cache
+  invalidation used by v1.
 - Focused tests cover v1/v2 carrier shapes, provenance, bounds, ordering,
   malformed-latest behavior, reload, compaction-shaped history omission,
   compacted-away carrier invalidation, bounded cache behavior, tool ownership,
@@ -130,6 +132,16 @@ The implementation was driven through focused red/green slices:
    first failed with `invalidateForCompaction is not a function`; the hook now
    invalidates that view, and the first post-compaction transform reconstructs
    from current host history. If the carrier is gone, the result is `UNKNOWN`.
+8. A fresh recovered-SHA review then proved that v2 did not route compaction to
+   that invalidation hook. The first focused test failed because the bridge did
+   not exist. Current official OpenCode source at
+   `d6855b6b47a8433462ac6aeeba882ccf734cb7f1` defines the native
+   `session.next.compaction.started` event with a top-level `sessionID`; the
+   existing v2 event pump now recognizes only that exact event, accepts the
+   current top-level `sessionID` or the already-supported beta `properties`
+   envelope, and invokes the existing v1 invalidation callback before other
+   event consumers. Unknown or malformed events do nothing. No compaction
+   manager or new event subsystem was added.
 
 No adjacent production behavior was refactored.
 
@@ -137,9 +149,9 @@ No adjacent production behavior was refactored.
 
 | Validation | Result |
 | --- | --- |
-| Focused WorkIntent/tool/v2/plugin tests | `61 pass / 0 fail / 149 expect()` |
+| Focused WorkIntent/tool/v2/plugin tests | `63 pass / 0 fail / 158 expect()` |
 | Cache-safety properties, snapshots, and tripwire | `17 pass / 0 fail / 3 snapshots / 32 expect()` |
-| Full test suite | `2439 pass / 0 fail / 3 snapshots / 6188 expect()` across 146 files |
+| Full test suite | `2441 pass / 0 fail / 3 snapshots / 6197 expect()` across 146 files |
 | `bun run typecheck` | exit 0 |
 | `bun run build` | exit 0 |
 | `bun run verify:release` | exit 0; packed install/import verification passed |
@@ -156,11 +168,12 @@ was restored; the final diff does not delete or modify the artifact.
 
 - A fresh adapter reconstructs from the session-scoped host history reader,
   proving plugin reload does not depend on prior process memory.
-- Because `experimental.session.compacting` runs before compaction, it
-  invalidates the session's old in-memory view instead of re-reading and
-  preserving pre-compaction history. The first post-compaction transform then
-  reconstructs from current host history when its visible messages omit the
-  carrier. If the carrier was compacted away, the result is `UNKNOWN`.
+- On v1, `experimental.session.compacting` invalidates the session's old
+  in-memory view before compaction. On v2, the existing event pump maps the
+  native `session.next.compaction.started` event to that same invalidation.
+  The first post-compaction transform therefore reconstructs from current host
+  history when its visible messages omit the carrier. If the carrier was
+  compacted away, the result is `UNKNOWN`.
 - Ordinary carrier-free transforms do not repeat the same history read for an
   already reconstructed session; compaction is the explicit invalidation
   boundary.

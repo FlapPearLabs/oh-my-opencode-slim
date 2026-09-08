@@ -15,7 +15,7 @@ v2 registrations. v1 behavior is unchanged.
 | Path | Role |
 |---|---|
 | `index.ts` | Barrel: re-exports `createV2Setup` and the v2 context types. Imported by `src/index.ts` for the dual `default` export. |
-| `setup.ts` | `createV2Setup()` → the `setup(ctx)` orchestrator v2 calls. Capability-guards reduced/TUI-side hosts (no `agent.transform`). Registers agents, tools, MCPs, commands, the merged context hook, tool-execute bridges, and the event pump — each independently try/catch-guarded with a zero-registration health check. Exports the pure command-marker helpers (`wrapCommandMarker`/`parseCommandMarker`/`stripCommandMarker`), `createCommandRegistration`, `applyCommandMarkerToContext`, the merged context-hook builder `createSessionContextHandler`, the tool-execute bridge factory `createToolExecuteBridges`, and `adaptMcpServer`. |
+| `setup.ts` | `createV2Setup()` → the `setup(ctx)` orchestrator v2 calls. Capability-guards reduced/TUI-side hosts (no `agent.transform`). Registers agents, tools, MCPs, commands, the merged context hook, tool-execute bridges, and the event pump — each independently try/catch-guarded with a zero-registration health check. The event pump routes native `session.next.compaction.started` to the reused v1 pre-compaction invalidation hook before other consumers. Exports the pure command-marker helpers (`wrapCommandMarker`/`parseCommandMarker`/`stripCommandMarker`), `createCommandRegistration`, `applyCommandMarkerToContext`, the merged context-hook builder `createSessionContextHandler`, the tool-execute bridge factory `createToolExecuteBridges`, `dispatchV2CompactionStarted`, and `adaptMcpServer`. |
 | `types.ts` | v2 plugin context surface (`V2Context` + draft/event types), mirrored locally (v2 plugin package is not a build-time dependency). Runtime-probed session methods (`get`/`interrupt`/`switchModel`/`context`/`prompt`/`synthetic`/`rename`/`switchAgent`) and the optional `mcp` domain are declared optional with probe notes. |
 | `session-submit.ts` | Shared `createSessionSubmit` (prompt-only user-prompt submit via `ctx.session.prompt`) + `textFromContent`; used by both the generic command bridge and the interview bridge to avoid a setup↔bridge import cycle. |
 | `client-shim.ts` | `buildPluginInput`: constructs a v1-shaped `PluginInput` with a **real-delegation** client — v1 SDK call shapes translate to v2 flat session calls (`get`, `interrupt`, `context`, `prompt` with `delivery:"steer"`, `rename`), with honest degradation (log or omit) where the host lacks the method. `resolveV2Directory` prefers `ctx.location.directory` (#45403+) with a `process.cwd()` fallback. `promptAsync` encapsulates the v2 model-switch semantics (`switchModel` before the prompt) that power the v1 foreground-fallback pipeline. Marks the input `hostFlavor: 'v2'` (multiplexer gating in `src/index.ts`) and threads the probed `generate.text` channel as `experimental_v2`. Never fakes success shapes (no invented `serverUrl`). |
@@ -58,8 +58,9 @@ v2 registrations. v1 behavior is unchanged.
      (`delegation.ts`), a mutable args view written back after the hook
      (so apply-patch repairs reach v2), and rethrow-on-before-failure so v2
      rejects the call (v1 guard enforcement)
-   - `event` → `ctx.event.subscribe()` loop: raw event to the interview
-     bridge first, then each `mapV2EventToV1` product to the v1 event hook
+   - `event` → `ctx.event.subscribe()` loop: native compaction-start first
+     invalidates stateful v1 views, then the raw event reaches the interview
+     bridge and each `mapV2EventToV1` product reaches the v1 event hook
 5. Returns a cleanup that disposes every v2 registration + the v1 `dispose`.
 
 Each bridge in step 4 is independently try/catch-guarded so one failure cannot
@@ -89,6 +90,11 @@ expanding the global v2 client surface.
   synthesized v1 shapes are appended for the specific fields the v1 consumers
   read (early registration gated on `parentID`; telemetry deduped by a
   deterministic fingerprint — no wall-clock or randomness).
+- **Compaction invalidation reuses the event pump.** The v2 bridge accepts only
+  native `session.next.compaction.started`, obtains `sessionID` from the current
+  top-level schema or the already-supported beta `properties` envelope, then
+  calls the existing v1 pre-compaction hook before any consumer can observe
+  compacted history. Unknown shapes are ignored; no compaction manager exists.
 - **Permission base.** v1 permission maps list only explicit entries (unlisted
   → implicit default-allow); v2 has no implicit default, so `adaptPermissions`
   prepends v2's standard permissive base before overlaying v1 entries.

@@ -7,6 +7,7 @@ import {
   createCommandRegistration,
   createSessionContextHandler,
   createToolExecuteBridges,
+  dispatchV2CompactionStarted,
   parseCommandMarker,
   registerSynthCommands,
   stripCommandMarker,
@@ -18,6 +19,62 @@ import type {
   V2CommandDraft,
   V2SessionContextEvent,
 } from './types';
+
+describe('v2 compaction invalidation bridge', () => {
+  test('dispatches supported native started event envelopes before cached state can be reused', async () => {
+    const compacting = mock(async (_input: { sessionID: string }) => {});
+
+    expect(
+      await dispatchV2CompactionStarted(
+        {
+          type: 'session.next.compaction.started',
+          sessionID: 'ses_compacting',
+          messageID: 'msg_compaction',
+          reason: 'auto',
+        },
+        compacting,
+      ),
+    ).toBe(true);
+    expect(compacting).toHaveBeenCalledWith({ sessionID: 'ses_compacting' });
+    expect(
+      await dispatchV2CompactionStarted(
+        {
+          type: 'session.next.compaction.started',
+          properties: { sessionID: 'ses_beta_compacting' },
+        },
+        compacting,
+      ),
+    ).toBe(true);
+    expect(compacting).toHaveBeenCalledTimes(2);
+    expect(compacting).toHaveBeenLastCalledWith({
+      sessionID: 'ses_beta_compacting',
+    });
+  });
+
+  test('ignores unknown or malformed events instead of inventing a session', async () => {
+    const compacting = mock(async (_input: { sessionID: string }) => {});
+
+    expect(
+      await dispatchV2CompactionStarted(
+        { type: 'session.next.compaction.ended', sessionID: 'ses_done' },
+        compacting,
+      ),
+    ).toBe(false);
+    expect(
+      await dispatchV2CompactionStarted(
+        { type: 'session.next.compaction.started' },
+        compacting,
+      ),
+    ).toBe(false);
+    expect(
+      await dispatchV2CompactionStarted(
+        { type: 'session.next.compaction.started', sessionID: '' },
+        compacting,
+      ),
+    ).toBe(false);
+    expect(compacting).not.toHaveBeenCalled();
+  });
+});
 
 function makeEvent(
   messages: Array<{ id?: string; role: string; content: unknown[] }>,
