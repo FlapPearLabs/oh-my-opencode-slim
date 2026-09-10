@@ -274,7 +274,7 @@ export class WorkIntentAdapter {
   readonly #directory: string | undefined;
   readonly #maxSessions: number;
   readonly #views = new Map<string, ReconstructedWorkIntent>();
-  #historyEpoch = Symbol('work-intent-history-epoch');
+  #viewEpoch = Symbol('work-intent-view-epoch');
 
   constructor(options: WorkIntentAdapterOptions) {
     this.#messages = options.messages;
@@ -287,12 +287,12 @@ export class WorkIntentAdapter {
   }
 
   clear(sessionID: string): void {
+    this.#viewEpoch = Symbol('work-intent-view-epoch');
     this.#views.delete(sessionID);
   }
 
   /** The host hook runs before compaction, so its view cannot remain authoritative. */
   invalidateForCompaction(sessionID: string): void {
-    this.#historyEpoch = Symbol('work-intent-history-epoch');
     this.clear(sessionID);
   }
 
@@ -300,6 +300,7 @@ export class WorkIntentAdapter {
     sessionID: string,
     view: ReconstructedWorkIntent,
   ): ReconstructedWorkIntent {
+    this.#viewEpoch = Symbol('work-intent-view-epoch');
     this.#views.delete(sessionID);
     this.#views.set(sessionID, view);
     while (this.#views.size > this.#maxSessions) {
@@ -313,13 +314,13 @@ export class WorkIntentAdapter {
   async reconstructSession(
     sessionID: string,
   ): Promise<ReconstructedWorkIntent> {
-    const historyEpoch = this.#historyEpoch;
+    const viewEpoch = this.#viewEpoch;
     try {
       const response = await this.#messages({
         path: { id: sessionID },
         ...(this.#directory ? { query: { directory: this.#directory } } : {}),
       });
-      if (historyEpoch !== this.#historyEpoch) {
+      if (viewEpoch !== this.#viewEpoch) {
         return { status: 'unknown' };
       }
       return this.#remember(
@@ -327,7 +328,7 @@ export class WorkIntentAdapter {
         reconstructWorkIntent(response.data ?? [], sessionID),
       );
     } catch {
-      if (historyEpoch !== this.#historyEpoch) {
+      if (viewEpoch !== this.#viewEpoch) {
         return { status: 'unknown' };
       }
       this.clear(sessionID);

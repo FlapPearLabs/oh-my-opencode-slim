@@ -410,6 +410,33 @@ describe('WorkIntent reconstruction lifecycle', () => {
     expect(historyReads).toBe(2);
   });
 
+  test('an older ordinary history read cannot overwrite a newer visible carrier', async () => {
+    const old = createWorkIntentEnvelope(SESSION_ID, input());
+    const current = createWorkIntentEnvelope(
+      SESSION_ID,
+      input({ state: 'waiting_for_user', phaseRef: 'new visible carrier' }),
+    );
+    let resolveHistory!: (value: { data: unknown[] }) => void;
+    const history = new Promise<{ data: unknown[] }>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const adapter = new WorkIntentAdapter({
+      messages: async () => history,
+    });
+
+    const pending = adapter.reconstructSession(SESSION_ID);
+    await adapter.reconstructTransform([
+      message('msg_current', [toolPart(current)]),
+    ]);
+    resolveHistory({ data: [message('msg_old', [toolPart(old)])] });
+
+    expect(await pending).toEqual({ status: 'unknown' });
+    expect(adapter.get(SESSION_ID)).toMatchObject({
+      status: 'known',
+      intent: { state: 'waiting_for_user', phaseRef: 'new visible carrier' },
+    });
+  });
+
   test('uses the v2 context session binding when messages omit sessionID', async () => {
     const rendered = createWorkIntentEnvelope(SESSION_ID, input());
     const adapter = new WorkIntentAdapter({

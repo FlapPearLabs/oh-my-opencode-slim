@@ -146,18 +146,25 @@ The implementation was driven through focused red/green slices:
    which an already in-flight pre-compaction history read could resolve after
    invalidation and restore stale `known` state. A deterministic deferred-read
    regression first returned `known`. The adapter now rotates one ephemeral,
-   process-local invalidation token at the compaction boundary; both fulfilled
-   and rejected history reads crossing that boundary return `UNKNOWN` and
-   cannot overwrite the bounded view, including a newer post-compaction
-   reconstruction. This token is not persisted, serialized, session state, a
-   timestamp, or a record-order version.
+   process-local view token whenever the bounded view changes, including the
+   compaction boundary; both fulfilled and rejected history reads crossing a
+   later view change return `UNKNOWN` and cannot overwrite it. This token is
+   never persisted or serialized and is neither session state, a timestamp,
+   nor a record-order version.
 10. A subsequent fresh Pro review identified that an ordinary transient host
     history error was cached as `UNKNOWN`, preventing later carrier-free
     transforms from retrying the existing history path. A regression first
     remained `UNKNOWN` after the host recovered. The catch path now clears any
     stale view and returns uncached `UNKNOWN`; the next ordinary transform can
-    reconstruct again without a timer, retry loop, or scheduler. Epoch-mismatched
+    reconstruct again without a timer, retry loop, or scheduler. Token-mismatched
     failures still leave any newer post-compaction view untouched.
+11. The next fresh Pro review identified the corresponding non-compaction
+    interleaving: an ordinary older history read could overwrite a carrier that
+    a concurrent transform had already observed. A deferred-read regression
+    first restored the older `active` state over a newer `waiting_for_user`
+    record. Rotating the same single view token on every remember/clear makes
+    all asynchronous history commits conditional on no later view mutation;
+    no additional map, lock, queue, or persisted version was introduced.
 
 No adjacent production behavior was refactored.
 
@@ -165,9 +172,9 @@ No adjacent production behavior was refactored.
 
 | Validation | Result |
 | --- | --- |
-| Focused WorkIntent/tool/v2/plugin tests | `66 pass / 0 fail / 168 expect()` |
+| Focused WorkIntent/tool/v2/plugin tests | `67 pass / 0 fail / 170 expect()` |
 | Cache-safety properties, snapshots, and tripwire | `17 pass / 0 fail / 3 snapshots / 32 expect()` |
-| Full test suite | `2444 pass / 0 fail / 3 snapshots / 6207 expect()` across 146 files |
+| Full test suite | `2445 pass / 0 fail / 3 snapshots / 6209 expect()` across 146 files |
 | `bun run typecheck` | exit 0 |
 | `bun run build` | exit 0 |
 | `bun run verify:release` | exit 0; packed install/import verification passed |
@@ -190,8 +197,9 @@ was restored; the final diff does not delete or modify the artifact.
   The first post-compaction transform therefore reconstructs from current host
   history when its visible messages omit the carrier. If the carrier was
   compacted away, the result is `UNKNOWN`.
-- An in-flight history read that crosses any compaction boundary is discarded
-  as `UNKNOWN`; a later carrier-free transform can perform a fresh host read.
+- An in-flight history read that crosses a compaction boundary or any newer view
+  mutation is discarded as `UNKNOWN`; a later carrier-free transform can
+  perform a fresh host read.
 - A host-history transport failure is fail-closed for the current transform but
   is not cached, so an ordinary later transform can recover through the same
   bounded reader.
