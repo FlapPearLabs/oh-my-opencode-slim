@@ -342,6 +342,38 @@ describe('WorkIntent reconstruction lifecycle', () => {
     expect(adapter.get(SESSION_ID)).toEqual({ status: 'unknown' });
   });
 
+  test('an in-flight pre-compaction failure cannot clobber a newer reconstructed view', async () => {
+    let rejectHistory!: (reason: Error) => void;
+    const history = new Promise<{ data: unknown[] }>((_resolve, reject) => {
+      rejectHistory = reject;
+    });
+    const adapter = new WorkIntentAdapter({
+      messages: async () => history,
+    });
+
+    const pending = adapter.reconstructSession(SESSION_ID);
+    adapter.invalidateForCompaction(SESSION_ID);
+    const current = createWorkIntentEnvelope(
+      SESSION_ID,
+      input({ state: 'waiting_for_user', phaseRef: 'post-compaction' }),
+    );
+    expect(
+      await adapter.reconstructTransform([
+        message('msg_current', [toolPart(current)]),
+      ]),
+    ).toMatchObject({
+      status: 'known',
+      intent: { state: 'waiting_for_user', phaseRef: 'post-compaction' },
+    });
+    rejectHistory(new Error('stale pre-compaction read failed'));
+
+    expect(await pending).toEqual({ status: 'unknown' });
+    expect(adapter.get(SESSION_ID)).toMatchObject({
+      status: 'known',
+      intent: { state: 'waiting_for_user', phaseRef: 'post-compaction' },
+    });
+  });
+
   test('uses the v2 context session binding when messages omit sessionID', async () => {
     const rendered = createWorkIntentEnvelope(SESSION_ID, input());
     const adapter = new WorkIntentAdapter({

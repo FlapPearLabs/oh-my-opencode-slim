@@ -327,6 +327,9 @@ export class WorkIntentAdapter {
         reconstructWorkIntent(response.data ?? [], sessionID),
       );
     } catch {
+      if (historyEpoch !== this.#historyEpoch) {
+        return { status: 'unknown' };
+      }
       return this.#remember(sessionID, { status: 'unknown' });
     }
   }

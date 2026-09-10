@@ -146,9 +146,10 @@ The implementation was driven through focused red/green slices:
    which an already in-flight pre-compaction history read could resolve after
    invalidation and restore stale `known` state. A deterministic deferred-read
    regression first returned `known`. The adapter now rotates one ephemeral,
-   process-local invalidation token at the compaction boundary; a history read
-   crossing that boundary returns `UNKNOWN` and cannot write its result into
-   the bounded view. This token is not persisted, serialized, session state, a
+   process-local invalidation token at the compaction boundary; both fulfilled
+   and rejected history reads crossing that boundary return `UNKNOWN` and
+   cannot overwrite the bounded view, including a newer post-compaction
+   reconstruction. This token is not persisted, serialized, session state, a
    timestamp, or a record-order version.
 
 No adjacent production behavior was refactored.
@@ -157,9 +158,9 @@ No adjacent production behavior was refactored.
 
 | Validation | Result |
 | --- | --- |
-| Focused WorkIntent/tool/v2/plugin tests | `64 pass / 0 fail / 160 expect()` |
+| Focused WorkIntent/tool/v2/plugin tests | `65 pass / 0 fail / 163 expect()` |
 | Cache-safety properties, snapshots, and tripwire | `17 pass / 0 fail / 3 snapshots / 32 expect()` |
-| Full test suite | `2442 pass / 0 fail / 3 snapshots / 6199 expect()` across 146 files |
+| Full test suite | `2443 pass / 0 fail / 3 snapshots / 6202 expect()` across 146 files |
 | `bun run typecheck` | exit 0 |
 | `bun run build` | exit 0 |
 | `bun run verify:release` | exit 0; packed install/import verification passed |
