@@ -330,7 +330,8 @@ export class WorkIntentAdapter {
       if (historyEpoch !== this.#historyEpoch) {
         return { status: 'unknown' };
       }
-      return this.#remember(sessionID, { status: 'unknown' });
+      this.clear(sessionID);
+      return { status: 'unknown' };
     }
   }
 

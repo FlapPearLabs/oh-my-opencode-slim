@@ -374,6 +374,42 @@ describe('WorkIntent reconstruction lifecycle', () => {
     });
   });
 
+  test('a transient history failure clears stale state without caching UNKNOWN', async () => {
+    const rendered = createWorkIntentEnvelope(SESSION_ID, input());
+    let historyReads = 0;
+    let failHistory = true;
+    const adapter = new WorkIntentAdapter({
+      messages: async () => {
+        historyReads += 1;
+        if (failHistory) throw new Error('temporary host failure');
+        return { data: [message('msg_recovered', [toolPart(rendered)])] };
+      },
+    });
+
+    await adapter.reconstructTransform([
+      message('msg_visible', [toolPart(rendered)]),
+    ]);
+    expect(adapter.get(SESSION_ID)).toMatchObject({ status: 'known' });
+
+    expect(await adapter.reconstructSession(SESSION_ID)).toEqual({
+      status: 'unknown',
+    });
+    expect(adapter.get(SESSION_ID)).toEqual({ status: 'unknown' });
+
+    failHistory = false;
+    expect(
+      await adapter.reconstructTransform(
+        [
+          message('msg_summary', [
+            { type: 'text', text: 'carrier not visible' },
+          ]),
+        ],
+        SESSION_ID,
+      ),
+    ).toMatchObject({ status: 'known', intent: { state: 'active' } });
+    expect(historyReads).toBe(2);
+  });
+
   test('uses the v2 context session binding when messages omit sessionID', async () => {
     const rendered = createWorkIntentEnvelope(SESSION_ID, input());
     const adapter = new WorkIntentAdapter({

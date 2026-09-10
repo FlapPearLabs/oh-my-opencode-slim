@@ -151,6 +151,13 @@ The implementation was driven through focused red/green slices:
    cannot overwrite the bounded view, including a newer post-compaction
    reconstruction. This token is not persisted, serialized, session state, a
    timestamp, or a record-order version.
+10. A subsequent fresh Pro review identified that an ordinary transient host
+    history error was cached as `UNKNOWN`, preventing later carrier-free
+    transforms from retrying the existing history path. A regression first
+    remained `UNKNOWN` after the host recovered. The catch path now clears any
+    stale view and returns uncached `UNKNOWN`; the next ordinary transform can
+    reconstruct again without a timer, retry loop, or scheduler. Epoch-mismatched
+    failures still leave any newer post-compaction view untouched.
 
 No adjacent production behavior was refactored.
 
@@ -158,9 +165,9 @@ No adjacent production behavior was refactored.
 
 | Validation | Result |
 | --- | --- |
-| Focused WorkIntent/tool/v2/plugin tests | `65 pass / 0 fail / 163 expect()` |
+| Focused WorkIntent/tool/v2/plugin tests | `66 pass / 0 fail / 168 expect()` |
 | Cache-safety properties, snapshots, and tripwire | `17 pass / 0 fail / 3 snapshots / 32 expect()` |
-| Full test suite | `2443 pass / 0 fail / 3 snapshots / 6202 expect()` across 146 files |
+| Full test suite | `2444 pass / 0 fail / 3 snapshots / 6207 expect()` across 146 files |
 | `bun run typecheck` | exit 0 |
 | `bun run build` | exit 0 |
 | `bun run verify:release` | exit 0; packed install/import verification passed |
@@ -185,6 +192,9 @@ was restored; the final diff does not delete or modify the artifact.
   compacted away, the result is `UNKNOWN`.
 - An in-flight history read that crosses any compaction boundary is discarded
   as `UNKNOWN`; a later carrier-free transform can perform a fresh host read.
+- A host-history transport failure is fail-closed for the current transform but
+  is not cached, so an ordinary later transform can recover through the same
+  bounded reader.
 - Ordinary carrier-free transforms do not repeat the same history read for an
   already reconstructed session; compaction is the explicit invalidation
   boundary.
