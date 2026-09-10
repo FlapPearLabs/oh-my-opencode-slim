@@ -8,3 +8,4 @@ export { createTaskResultTool } from './task-result';
 export { createTaskReviveTool } from './task-revive';
 export { createTaskStatusTool } from './task-status';
 export { createWaitForUserTool } from './wait-for-user';
+export { createWorkIntentTool } from './work-intent';

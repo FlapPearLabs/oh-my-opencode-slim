@@ -116,10 +116,24 @@ describe('plugin tool registration', () => {
 
   test('registers wait_for_user and recovers a stale orchestrator session mapping', async () => {
     const noop = async () => ({});
-    const session = new Proxy({}, { get: () => noop }) as Record<
-      string,
-      unknown
-    >;
+    let historyReads = 0;
+    let prompts = 0;
+    const session = new Proxy(
+      {
+        messages: async () => {
+          historyReads += 1;
+          return { data: [] };
+        },
+        promptAsync: async () => {
+          prompts += 1;
+          return {};
+        },
+      },
+      {
+        get: (target, property) =>
+          target[property as keyof typeof target] ?? noop,
+      },
+    ) as Record<string, unknown>;
     const client = new Proxy(
       { app: { log: noop }, session },
       {
@@ -145,12 +159,46 @@ describe('plugin tool registration', () => {
     expect(hooks.tool?.task_cancel).toBeDefined();
     expect(hooks.tool?.task_revive).toBeDefined();
     expect(hooks.tool?.wait_for_user).toBeDefined();
+    expect(hooks.tool?.slim_work_intent).toBeDefined();
     await expect(
       hooks.tool?.wait_for_user?.execute(
         { reason: 'Complete the external approval.' },
         { sessionID: 'parent-after-reload', agent: 'orchestrator' } as never,
       ),
     ).resolves.toContain('state: waiting_for_user');
+    await expect(
+      hooks.tool?.slim_work_intent?.execute(
+        {
+          objective: 'Complete the current accepted ticket.',
+          success_criteria: 'All required evidence passes.',
+          state: 'active',
+        },
+        { sessionID: 'parent-after-reload', agent: 'orchestrator' } as never,
+      ),
+    ).resolves.toContain('slim.work-intent.v1');
+    expect(hooks['experimental.session.compacting']).toBeDefined();
+    await hooks['experimental.session.compacting']?.(
+      { sessionID: 'parent-after-reload' },
+      { context: [] },
+    );
+    expect(historyReads).toBe(0);
+    await hooks['experimental.chat.messages.transform']?.(
+      { sessionID: 'parent-after-reload' } as never,
+      {
+        messages: [
+          {
+            info: {
+              id: 'msg_compaction_summary',
+              sessionID: 'parent-after-reload',
+              role: 'user',
+            },
+            parts: [{ type: 'text', text: 'Compaction summary' }],
+          },
+        ],
+      },
+    );
+    expect(historyReads).toBe(1);
+    expect(prompts).toBe(0);
   });
 
   test('exposes an idempotent top-level dispose finalizer', async () => {

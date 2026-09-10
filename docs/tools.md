@@ -51,6 +51,7 @@ Fast, structural code search and refactoring - more powerful than plain text gre
 | `task_cancel` | Stop a generation while retaining its session |
 | `task_revive` | Resume a retained session with a new instruction |
 | `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message |
+| `slim_work_intent` | Record the current orchestrator session's bounded objective and authoritative state in OpenCode history |
 
 The task controls use the task ID or Background Job Board alias for the task being
 managed. `task_message` does not interrupt the current generation. `task_cancel`
@@ -73,6 +74,16 @@ that preceded the wait do not.
 See the background orchestration concepts in
 [Background Orchestration](background-orchestration.md) for the session
 lifecycle, cancellation, and explicit-wait edge cases behind these tools.
+
+`slim_work_intent` is orchestrator-only. It records a canonical, session-bound
+`slim.work-intent.v1` result after the existing workflow authority has already
+determined the objective, success criteria, state (`active`,
+`waiting_for_user`, `complete`, or `blocked`), and optional bounded progress or
+evidence references. OpenCode session history is the only persistence layer;
+Slim reconstructs a bounded in-memory view after compaction or plugin reload.
+An invalid or inconsistent newest record becomes `UNKNOWN` without falling back
+to older state. The tool does not infer completion, schedule work, dispatch
+tasks, or wake a session.
 
 ---
 
