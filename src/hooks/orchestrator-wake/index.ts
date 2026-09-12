@@ -16,6 +16,7 @@ import {
 } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import type { ReconstructedWorkIntent } from '../../utils/work-intent';
 import type { SessionLifecycle } from '../session-lifecycle';
 import {
   type ContinuationModelSelection,
@@ -42,6 +43,9 @@ export const ORCHESTRATOR_WAKE_TEXT =
 
 export const ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT =
   '<system-reminder>\nA background job stopped without a terminal result. Consult the Background Job Board, recover or reroute the work as needed, and do not wait for that job as if it were still running. Do not respond to this reminder.\n</system-reminder>';
+
+export const ORCHESTRATOR_RECONCILIATION_WAKE_TEXT =
+  '<system-reminder>\nA background job reached a terminal result. Consume the result, reconcile finished work, and continue or complete remaining tasks. Do not respond to this reminder.\n</system-reminder>';
 
 /** After this many successful wakes with an unchanged fingerprint, stop. */
 export const ORCHESTRATOR_WAKE_UNCHANGED_CAP = 2;
@@ -75,6 +79,12 @@ export type OrchestratorWakeOptions = {
   coordinator?: SessionLifecycle;
   /** Test seam: override interval without changing config validation. */
   intervalMs?: number;
+  /** Query reconstructed WorkIntent state for session. */
+  getWorkIntent?: (
+    sessionID: string,
+  ) => ReconstructedWorkIntent | Promise<ReconstructedWorkIntent> | undefined;
+  /** Query whether session has any unresolved terminal child jobs. */
+  hasTerminalUnreconciled?: (sessionID: string) => boolean;
 };
 
 function hasRequiredSessionApis(
@@ -312,6 +322,7 @@ export function createOrchestratorWakeScheduler(
     if (!options.shouldManageSession(sessionID)) return false;
     if (options.hasInputWait(sessionID)) return false;
     if (options.isFallbackInProgress?.(sessionID)) return false;
+    if (options.hasTerminalUnreconciled?.(sessionID)) return false;
     if (getWakeProgress(sessionID).stopped) return false;
     return true;
   }
@@ -510,6 +521,20 @@ export function createOrchestratorWakeScheduler(
         endIdleSpell(sessionID, false);
         return;
       }
+      if (!recoveryWake && options.hasTerminalUnreconciled?.(sessionID)) {
+        return;
+      }
+      if (!recoveryWake && options.getWorkIntent) {
+        const intentResult = await options.getWorkIntent(sessionID);
+        if (
+          !intentResult ||
+          intentResult.status !== 'known' ||
+          intentResult.intent?.state !== 'active'
+        ) {
+          endIdleSpell(sessionID, false);
+          return;
+        }
+      }
 
       const latestFingerprint = buildOrchestratorWakeFingerprint(
         latest.todos,
@@ -665,6 +690,105 @@ export function createOrchestratorWakeScheduler(
     void evaluate(sessionID, state.generation, true);
   }
 
+  const seenReconciliationTargets = new Map<string, number>();
+
+  /**
+   * Reconciliation Wake: Wakes parent exactly once to consume a reliably observed
+   * canonical terminal child result ('completed' | 'error' | 'cancelled') that remains
+   * unreconciled. Bypasses terminalUnreconciled circular suppression while respecting
+   * user waits, active fallback, and one-flight protection.
+   */
+  async function triggerReconciliationWake(
+    sessionID: string,
+    target?: {
+      taskID: string;
+      generation: number;
+      state?: string;
+      resultOccurrence?: number;
+    },
+  ): Promise<void> {
+    if (
+      disposed ||
+      !enabled ||
+      !hasRequiredSessionApis(sessionSdk) ||
+      !options.shouldManageSession(sessionID)
+    ) {
+      return;
+    }
+
+    if (target) {
+      if (
+        target.state &&
+        target.state !== 'completed' &&
+        target.state !== 'error' &&
+        target.state !== 'cancelled'
+      ) {
+        return;
+      }
+      const seenGen = seenReconciliationTargets.get(target.taskID);
+      if (seenGen !== undefined && seenGen >= target.generation) {
+        return;
+      }
+      seenReconciliationTargets.set(target.taskID, target.generation);
+    }
+
+    if (
+      options.hasInputWait(sessionID) ||
+      options.isFallbackInProgress?.(sessionID)
+    ) {
+      return;
+    }
+
+    const owner = tryBeginWakeEvaluation(sessionID);
+    if (!owner) return;
+
+    try {
+      if (
+        options.hasInputWait(sessionID) ||
+        options.isFallbackInProgress?.(sessionID)
+      ) {
+        return;
+      }
+
+      const snapshot = await readHostSnapshot(sessionID);
+      if (!snapshot) return;
+      if (isActiveStatus(snapshot.status, sessionID)) return;
+
+      const fingerprint = buildOrchestratorWakeFingerprint(
+        snapshot.todos,
+        snapshot.children,
+        snapshot.status,
+      );
+
+      if (!commitWakeReservation(sessionID, owner, fingerprint)) {
+        return;
+      }
+
+      const modelSelection = snapshot.model ?? getObservedWakeModel(sessionID);
+
+      await sessionSdk.promptAsync({
+        path: { id: sessionID },
+        query: { directory },
+        body: {
+          agent: 'orchestrator',
+          ...(modelSelection ? { model: modelSelection.model } : {}),
+          parts: [
+            createInternalAgentTextPart(ORCHESTRATOR_RECONCILIATION_WAKE_TEXT),
+          ],
+        },
+        throwOnError: true,
+      });
+    } catch (error) {
+      clearExpectingWakeBusy(sessionID);
+      log('[orchestrator-wake] reconciliation wake error', {
+        sessionID,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      releaseWakeEvaluation(sessionID, owner);
+    }
+  }
+
   async function event(input: {
     event: {
       type: string;
@@ -751,6 +875,7 @@ export function createOrchestratorWakeScheduler(
     event,
     observeChatMessage,
     triggerStoppedJobRecovery,
+    triggerReconciliationWake,
     /** Clear timers when wait_for_user or fallback begins. */
     suppress,
     /** Test seam */

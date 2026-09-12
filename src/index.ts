@@ -524,12 +524,32 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       isFallbackInProgress: (sessionID) =>
         foregroundFallback.isFallbackInProgress(sessionID),
       coordinator: sessionLifecycle,
+      getWorkIntent: (sessionID) => workIntentAdapter.get(sessionID),
+      hasTerminalUnreconciled: (sessionID) =>
+        backgroundJobCoordinator.hasTerminalUnreconciled(sessionID),
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
-      if (record.state !== 'stopped' || !record.terminalUnreconciled) return;
-      orchestratorWakeScheduler.triggerStoppedJobRecovery(
-        record.parentSessionID,
-      );
+      if (!record.terminalUnreconciled) return;
+      if (record.state === 'stopped') {
+        orchestratorWakeScheduler.triggerStoppedJobRecovery(
+          record.parentSessionID,
+        );
+        return;
+      }
+      if (
+        record.state === 'completed' ||
+        record.state === 'error' ||
+        record.state === 'cancelled'
+      ) {
+        void orchestratorWakeScheduler.triggerReconciliationWake(
+          record.parentSessionID,
+          {
+            taskID: record.taskID,
+            generation: record.generation,
+            state: record.state,
+          },
+        );
+      }
     });
 
     // Initialize hooks and wrapPostToolHook helper for error isolation
