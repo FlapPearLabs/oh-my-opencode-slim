@@ -5,6 +5,7 @@ import { resetUserWaitGateForTests } from '../task-session-manager/user-wait-gat
 import {
   buildOrchestratorWakeFingerprint,
   createOrchestratorWakeScheduler,
+  ORCHESTRATOR_RECONCILIATION_WAKE_TEXT,
   ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT,
   ORCHESTRATOR_WAKE_TEXT,
   ORCHESTRATOR_WAKE_UNCHANGED_CAP,
@@ -122,6 +123,8 @@ function createScheduler(options?: {
   directory?: string;
   getWorkIntent?: OrchestratorWakeOptions['getWorkIntent'];
   hasTerminalUnreconciled?: OrchestratorWakeOptions['hasTerminalUnreconciled'];
+  getJob?: (taskID: string) => any;
+  isJobTerminalUnreconciled?: (taskID: string) => boolean;
 }) {
   const client = options?.sessionClient;
   const session = client === null ? undefined : (client ?? makeClient());
@@ -142,7 +145,9 @@ function createScheduler(options?: {
     coordinator: options?.coordinator,
     getWorkIntent: options?.getWorkIntent,
     hasTerminalUnreconciled: options?.hasTerminalUnreconciled,
-  });
+    getJob: options?.getJob,
+    isJobTerminalUnreconciled: options?.isJobTerminalUnreconciled,
+  } as any);
 
   return { scheduler, session: session as SessionClient | undefined };
 }
@@ -1100,55 +1105,135 @@ describe('orchestrator wake scheduler', () => {
       expect(promptAsync).toHaveBeenCalledTimes(1);
     });
 
-    test('duplicate canonical terminal event does NOT trigger second wake', async () => {
+    // P1-1: Exact Reconciliation Identity
+    test('same task / same generation / same occurrence duplicate does not trigger duplicate wake', async () => {
       const promptAsync = mock(async () => ({}));
       const { scheduler } = createScheduler({
         sessionClient: makeClient({ promptAsync }),
         hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
       });
 
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
         generation: 1,
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
         generation: 1,
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
 
       expect(promptAsync).toHaveBeenCalledTimes(1);
     });
 
-    test('stale generation or result occurrence does NOT trigger reconciliation wake', async () => {
+    test('same task / same generation / different authoritative occurrence must NOT be collapsed merely because generation is the same', async () => {
+      const promptAsync = mock(async () => ({}));
+      let currentJob = {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        terminalUnreconciled: true,
+        state: 'completed',
+      };
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({ promptAsync }),
+        hasTerminalUnreconciled: () => true,
+        getJob: () => currentJob,
+      });
+
+      // First occurrence
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+
+      // Now a different authoritative occurrence arrives for the same task and same generation
+      currentJob = {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-2',
+        terminalUnreconciled: true,
+        state: 'completed',
+      };
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-2',
+        state: 'completed',
+      });
+      // MUST NOT be collapsed merely because generation is the same!
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    });
+
+    test('stale generation is suppressed', async () => {
       const promptAsync = mock(async () => ({}));
       const { scheduler } = createScheduler({
         sessionClient: makeClient({ promptAsync }),
         hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 2,
+          occurrenceID: 'occ-2',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
       });
 
-      // Advance generation
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
-        generation: 2,
+        generation: 1, // Stale generation
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
-      expect(promptAsync).toHaveBeenCalledTimes(1);
+      expect(promptAsync).not.toHaveBeenCalled();
+    });
 
-      // Stale generation 1
+    test('stale or already-reconciled occurrence is suppressed', async () => {
+      const promptAsync = mock(async () => ({}));
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({ promptAsync }),
+        hasTerminalUnreconciled: () => false,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: false,
+          state: 'completed',
+        }),
+      });
+
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
         generation: 1,
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
-      expect(promptAsync).toHaveBeenCalledTimes(1);
+      expect(promptAsync).not.toHaveBeenCalled();
     });
 
     test('stopped without native task result does NOT trigger canonical reconciliation wake', async () => {
       const promptAsync = mock(async () => ({}));
       const { scheduler } = createScheduler({
         sessionClient: makeClient({ promptAsync }),
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          terminalUnreconciled: true,
+          state: 'stopped',
+        }),
       });
 
       await (scheduler as any).triggerReconciliationWake('p1', {
@@ -1159,41 +1244,315 @@ describe('orchestrator wake scheduler', () => {
       expect(promptAsync).not.toHaveBeenCalled();
     });
 
-    test('real user wait suppresses reconciliation wake', async () => {
+    // P1-3: Do not burn occurrence before success
+    test('user wait blocks occurrence; clear wait; same occurrence can reconcile', async () => {
       const promptAsync = mock(async () => ({}));
+      let hasWait = true;
       const { scheduler } = createScheduler({
         sessionClient: makeClient({ promptAsync }),
-        hasInputWait: () => true,
+        hasTerminalUnreconciled: () => true,
+        hasInputWait: () => hasWait,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
+      });
+
+      // Blocked by user wait
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+      expect(promptAsync).not.toHaveBeenCalled();
+
+      // Clear wait: same occurrence must still be eligible to reconcile!
+      hasWait = false;
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    });
+
+    test('fallback blocks occurrence; clear fallback; same occurrence can reconcile', async () => {
+      const promptAsync = mock(async () => ({}));
+      let fallback = true;
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({ promptAsync }),
+        hasTerminalUnreconciled: () => true,
+        isFallbackInProgress: () => fallback,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
+      });
+
+      // Blocked by fallback
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+      expect(promptAsync).not.toHaveBeenCalled();
+
+      // Clear fallback: same occurrence must still be eligible to reconcile!
+      fallback = false;
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    });
+
+    test('host snapshot failure does not permanently discard occurrence', async () => {
+      let failSnapshot = true;
+      const promptAsync = mock(async () => ({}));
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({
+          promptAsync,
+          status: mock(async () => {
+            if (failSnapshot) return null;
+            return { data: {} };
+          }),
+        }),
+        hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
       });
 
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
         generation: 1,
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
       expect(promptAsync).not.toHaveBeenCalled();
-    });
 
-    test('active fallback suppresses reconciliation wake', async () => {
-      const promptAsync = mock(async () => ({}));
-      const { scheduler } = createScheduler({
-        sessionClient: makeClient({ promptAsync }),
-        isFallbackInProgress: () => true,
-      });
-
+      failSnapshot = false;
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
         generation: 1,
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
-      expect(promptAsync).not.toHaveBeenCalled();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
     });
 
-    test('terminal unreconciled child suppresses normal continuation wake until reconciled', async () => {
+    test('prompt failure does not permanently discard occurrence', async () => {
+      let promptShouldFail = true;
+      const promptAsync = mock(async () => {
+        if (promptShouldFail) throw new Error('dispatch failed');
+        return {};
+      });
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({ promptAsync }),
+        hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
+      });
+
+      try {
+        await (scheduler as any).triggerReconciliationWake('p1', {
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          state: 'completed',
+        });
+      } catch {}
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+
+      promptShouldFail = false;
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    });
+
+    // P1-4: Reconciliation wake prompt text must NOT authorize continuation
+    test('reconciliation prompt text does not authorize continuation or completion', () => {
+      const text = ORCHESTRATOR_RECONCILIATION_WAKE_TEXT.toLowerCase();
+      expect(text).not.toContain('continue remaining');
+      expect(text).not.toContain('complete remaining');
+      expect(text).not.toContain('continue or complete');
+      expect(text).not.toContain('resume autonomous');
+      expect(text).toContain('reconcile');
+      expect(text).toContain('do not infer permission to continue');
+    });
+
+    // P1-5: Preserve stopped recovery
+    test('stopped with terminalUnreconciled does not self-lock stopped recovery', async () => {
       const promptAsync = mock(async () => ({}));
       const { scheduler } = createScheduler({
         sessionClient: makeClient({ promptAsync }),
         hasTerminalUnreconciled: () => true,
+      });
+
+      // Stopped recovery should proceed even if terminalUnreconciled is true
+      scheduler.triggerStoppedJobRecovery('p1');
+      await clock.advance(0);
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      const call = promptAsync.mock.calls[0][0];
+      const text = call.body?.parts?.[0]?.text ?? call.parts?.[0]?.text;
+      expect(text).toContain(ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT);
+    });
+
+    // P1-6: Revalidate after async snapshot
+    test('user wait becoming active during async snapshot aborts reconciliation dispatch', async () => {
+      const promptAsync = mock(async () => ({}));
+      let hasWait = false;
+      let resolveStatus: (v: any) => void;
+      const statusPromise = new Promise((resolve) => {
+        resolveStatus = resolve;
+      });
+
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({
+          promptAsync,
+          status: mock(() => statusPromise),
+        }),
+        hasInputWait: () => hasWait,
+        hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
+      });
+
+      const wakePromise = (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+
+      // Mutate during async snapshot
+      hasWait = true;
+      resolveStatus?.({ data: {} });
+      await wakePromise;
+
+      expect(promptAsync).not.toHaveBeenCalled();
+    });
+
+    test('target becoming reconciled during async snapshot aborts reconciliation dispatch', async () => {
+      const promptAsync = mock(async () => ({}));
+      let jobReconciled = false;
+      let resolveStatus: (v: any) => void;
+      const statusPromise = new Promise((resolve) => {
+        resolveStatus = resolve;
+      });
+
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({
+          promptAsync,
+          status: mock(() => statusPromise),
+        }),
+        hasTerminalUnreconciled: () => !jobReconciled,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: !jobReconciled,
+          state: 'completed',
+        }),
+      });
+
+      const wakePromise = (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+
+      // Reconciled during async snapshot
+      jobReconciled = true;
+      resolveStatus?.({ data: {} });
+      await wakePromise;
+
+      expect(promptAsync).not.toHaveBeenCalled();
+    });
+
+    test('fallback becoming active during async snapshot aborts reconciliation dispatch', async () => {
+      const promptAsync = mock(async () => ({}));
+      let fallback = false;
+      let resolveStatus: (v: any) => void;
+      const statusPromise = new Promise((resolve) => {
+        resolveStatus = resolve;
+      });
+
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({
+          promptAsync,
+          status: mock(() => statusPromise),
+        }),
+        isFallbackInProgress: () => fallback,
+        hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
+      });
+
+      const wakePromise = (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+
+      // Fallback starts during async snapshot
+      fallback = true;
+      resolveStatus?.({ data: {} });
+      await wakePromise;
+
+      expect(promptAsync).not.toHaveBeenCalled();
+    });
+
+    // Reconciliation -> continuation ordering
+    test('reconciliation wake occurs first, then after reconciliation normal continuation occurs', async () => {
+      const promptAsync = mock(async () => ({}));
+      let terminalUnreconciled = true;
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({ promptAsync }),
+        hasTerminalUnreconciled: () => terminalUnreconciled,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled,
+          state: 'completed',
+        }),
         getWorkIntent: () => ({
           status: 'known' as const,
           intent: {
@@ -1207,11 +1566,228 @@ describe('orchestrator wake scheduler', () => {
         }),
       });
 
+      // Normal idle schedule is blocked by terminalUnreconciled
       await scheduler.event({
         event: { type: 'session.idle', properties: { sessionID: 'p1' } },
       });
       await clock.advance(60_000);
       expect(promptAsync).not.toHaveBeenCalled();
+
+      // Trigger reconciliation wake
+      await (scheduler as any).triggerReconciliationWake('p1', {
+        taskID: 'task-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+      });
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      const firstCall = promptAsync.mock.calls[0][0];
+      const firstText =
+        firstCall.body?.parts?.[0]?.text ?? firstCall.parts?.[0]?.text;
+      expect(firstText).toContain(ORCHESTRATOR_RECONCILIATION_WAKE_TEXT);
+
+      // Now child is authoritatively reconciled
+      terminalUnreconciled = false;
+
+      // Idle occurs again: now normal continuation is allowed
+      await scheduler.event({
+        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+      });
+      await clock.advance(60_000);
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+      const secondCall = promptAsync.mock.calls[1][0];
+      const secondText =
+        secondCall.body?.parts?.[0]?.text ?? secondCall.parts?.[0]?.text;
+      expect(secondText).toContain(ORCHESTRATOR_WAKE_TEXT);
+    });
+
+    // Missing WorkIntent
+    test('missing WorkIntent record (undefined) suppresses normal continuation wake', async () => {
+      const promptAsync = mock(async () => ({}));
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({ promptAsync }),
+        getWorkIntent: () => undefined,
+      });
+
+      await scheduler.event({
+        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+      });
+      await clock.advance(60_000);
+      expect(promptAsync).not.toHaveBeenCalled();
+    });
+
+    // Explicit ordering assertion
+    test('normal continuation preserves ordering: host snapshot -> reconstructed WorkIntent -> reservation -> promptAsync', async () => {
+      const executionOrder: string[] = [];
+      const promptAsync = mock(async () => {
+        executionOrder.push('promptAsync');
+        return {};
+      });
+      const status = mock(async () => {
+        executionOrder.push('hostSnapshot');
+        return { data: {} };
+      });
+      const getWorkIntent = mock(async () => {
+        executionOrder.push('getWorkIntent');
+        return {
+          status: 'known' as const,
+          intent: {
+            objective: 'test',
+            successCriteria: 'done',
+            state: 'active' as const,
+            ownerSessionID: 'p1',
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        };
+      });
+
+      const { scheduler } = createScheduler({
+        sessionClient: makeClient({ promptAsync, status }),
+        getWorkIntent,
+      });
+
+      await scheduler.event({
+        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+      });
+      await clock.advance(60_000);
+
+      expect(executionOrder).toEqual([
+        'hostSnapshot',
+        'hostSnapshot',
+        'getWorkIntent',
+        'promptAsync',
+      ]);
+    });
+
+    // Production listener wiring contract for all canonical outcomes
+    test('production listener contract: completed, error, and cancelled trigger reconciliation wake with occurrenceID', () => {
+      const calls: any[] = [];
+      const fakeScheduler = {
+        triggerReconciliationWake: (sessionID: string, target: any) => {
+          calls.push({ type: 'reconciliation', sessionID, target });
+        },
+        triggerStoppedJobRecovery: (sessionID: string) => {
+          calls.push({ type: 'stopped', sessionID });
+        },
+      };
+
+      // Handler matching src/index.ts wiring
+      const listener = (record: any) => {
+        if (!record.terminalUnreconciled) return;
+        if (record.state === 'stopped') {
+          fakeScheduler.triggerStoppedJobRecovery(record.parentSessionID);
+          return;
+        }
+        if (
+          record.state === 'completed' ||
+          record.state === 'error' ||
+          record.state === 'cancelled'
+        ) {
+          void fakeScheduler.triggerReconciliationWake(record.parentSessionID, {
+            taskID: record.taskID,
+            generation: record.generation,
+            occurrenceID: record.occurrenceID,
+            state: record.state,
+          });
+        }
+      };
+
+      // Completed
+      listener({
+        taskID: 't1',
+        parentSessionID: 'p1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+        terminalUnreconciled: true,
+      });
+      expect(calls).toEqual([
+        {
+          type: 'reconciliation',
+          sessionID: 'p1',
+          target: {
+            taskID: 't1',
+            generation: 1,
+            occurrenceID: 'occ-1',
+            state: 'completed',
+          },
+        },
+      ]);
+
+      // Error
+      calls.length = 0;
+      listener({
+        taskID: 't1',
+        parentSessionID: 'p1',
+        generation: 1,
+        occurrenceID: 'occ-err',
+        state: 'error',
+        terminalUnreconciled: true,
+      });
+      expect(calls).toEqual([
+        {
+          type: 'reconciliation',
+          sessionID: 'p1',
+          target: {
+            taskID: 't1',
+            generation: 1,
+            occurrenceID: 'occ-err',
+            state: 'error',
+          },
+        },
+      ]);
+
+      // Cancelled
+      calls.length = 0;
+      listener({
+        taskID: 't1',
+        parentSessionID: 'p1',
+        generation: 1,
+        occurrenceID: 'occ-cancel',
+        state: 'cancelled',
+        terminalUnreconciled: true,
+      });
+      expect(calls).toEqual([
+        {
+          type: 'reconciliation',
+          sessionID: 'p1',
+          target: {
+            taskID: 't1',
+            generation: 1,
+            occurrenceID: 'occ-cancel',
+            state: 'cancelled',
+          },
+        },
+      ]);
+
+      // Stopped -> goes to stopped recovery, NOT reconciliation
+      calls.length = 0;
+      listener({
+        taskID: 't1',
+        parentSessionID: 'p1',
+        generation: 1,
+        state: 'stopped',
+        terminalUnreconciled: true,
+      });
+      expect(calls).toEqual([
+        {
+          type: 'stopped',
+          sessionID: 'p1',
+        },
+      ]);
+
+      // terminalUnreconciled false -> ignored
+      calls.length = 0;
+      listener({
+        taskID: 't1',
+        parentSessionID: 'p1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+        terminalUnreconciled: false,
+      });
+      expect(calls).toEqual([]);
     });
   });
 });

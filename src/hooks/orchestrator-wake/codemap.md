@@ -2,29 +2,46 @@
 
 ## Responsibility
 
-Periodic orchestrator wake scheduler. After continuous parent-idle time,
-capability-gated host session APIs may receive a static internal wake prompt
-when incomplete TODOs remain (or when a background job stopped without a
-terminal result). Active children do not suppress wakes; host responses are
-authoritative and the local job board is never consulted. Progress/reservation
-state is process-global so independently created hook instances share
-one-flight and the two-wake no-progress cap.
+Orchestrator wake scheduler for unattended runtime execution. Provides three
+distinct wake purposes:
+1. **Normal continuation wake**: Periodic wake after continuous parent-idle time
+   when incomplete TODOs remain and reconstructed WorkIntent is `active`.
+   Suppressed by missing/unknown/waiting_for_user/complete/blocked WorkIntent,
+   or by unresolved canonical terminal reconciliation (`hasTerminalUnreconciled`).
+2. **Canonical terminal reconciliation wake**: Triggered by canonical child
+   terminal outcomes (`completed`, `error`, `cancelled`). Reconciles a specific
+   authoritative occurrence identity `(taskID, generation, occurrenceID)`.
+   Prompts the orchestrator solely to observe and consume the terminal result and
+   update authoritative state; does not authorize autonomous continuation.
+3. **Stopped job recovery wake**: Immediate recovery wake for jobs that stopped
+   without a native canonical terminal result. Preserved as a separate path from
+   both normal continuation and reconciliation wakes (not blocked by
+   `hasTerminalUnreconciled`).
+
+Progress and reservation state is process-global so independently created hook
+instances share one-flight execution and the two-wake no-progress cap. No
+secondary wake ledgers exist.
 
 ## Design
 
 - **Scheduler** (`index.ts`): `createOrchestratorWakeScheduler(ctx, options)`
-  returns `{ event, observeChatMessage, triggerStoppedJobRecovery, suppress }`.
+  returns `{ event, observeChatMessage, triggerStoppedJobRecovery, triggerReconciliationWake, suppress }`.
   - Tracks per-session local state (`generation` symbol, timer, continuous
     idle flag) only; progress lives in the process gate.
-  - Gates (`canSchedule`): config enabled, required session APIs present
+  - Gates (`canSchedule(sessionID, purpose)`): config enabled, required session APIs present
     (`get`/`todo`/`children`/`status`/`promptAsync`), managed session,
     no input wait (`hasInputWait`), no fallback in progress, gate not stopped.
-  - Reads a host snapshot (todos + children + status map + session model) and
-    computes a fingerprint; unchanged fingerprints across wake attempts hit
-    `ORCHESTRATOR_WAKE_UNCHANGED_CAP` (2) and stop.
-  - Wakes via `promptAsync` with a static `<system-reminder>` text
-    (`ORCHESTRATOR_WAKE_TEXT` or `ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT`),
-    reserving the wake before prompt so a failed call cannot storm retries.
+    When `purpose === 'continuation'`, also blocks on unresolved terminal
+    child reconciliation (`hasTerminalUnreconciled`). Recovery wake bypasses this
+    continuation gate.
+  - Normal continuation reads host snapshot, verifies reconstructed WorkIntent is
+    `active`, verifies no incomplete work / active children remain, computes
+    fingerprint, and commits reservation before `promptAsync(ORCHESTRATOR_WAKE_TEXT)`.
+  - Reconciliation wake (`triggerReconciliationWake`) validates the exact canonical
+    occurrence `(taskID, generation, occurrenceID)`, revalidates all guards after
+    the async host snapshot, and dispatches `ORCHESTRATOR_RECONCILIATION_WAKE_TEXT`
+    narrowly instructing the orchestrator to consume the result without granting
+    continuation authority.
   - `triggerStoppedJobRecovery`: immediate recovery wake for jobs that stopped
     without a native terminal result (separate from the periodic TODO wake).
   - `observeChatMessage`: real external user activity rearms the no-progress
@@ -64,9 +81,15 @@ busy (external) / errors / user activity → rearm cap
 ## Integration
 
 - **Consumer**: `src/index.ts` creates the scheduler and routes `event`,
-  `chat.message` (`observeChatMessage`), `wait_for_user` (`suppress`), and
-  job-stopped recovery triggers to it; config comes from
-  `runtime.backgroundJobs.orchestratorWake` (`{ enabled, intervalMs }`).
+  `chat.message` (`observeChatMessage`), `wait_for_user` (`suppress`),
+  terminal outcome notifications (`triggerReconciliationWake`), and
+  job-stopped recovery triggers (`triggerStoppedJobRecovery`) to it;
+  config comes from `runtime.backgroundJobs.orchestratorWake` (`{ enabled, intervalMs }`).
+- **BackgroundJobCoordinator seams**: supplies `hasTerminalUnreconciled`,
+  `getJob`, `isJobTerminalUnreconciled`, and terminal outcome listeners
+  propagating `(taskID, generation, occurrenceID, state)`.
+- **WorkIntent seams**: supplies `getWorkIntent` for verifying `state === 'active'`
+  on normal continuation wakes.
 - **Task-session-manager seams**: `hasInputWait` (input-wait-tracker) and
   `parseContinuationModelSelection` (continuation-model-selection) gate and
   parameterize wake prompts.

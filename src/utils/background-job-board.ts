@@ -64,6 +64,7 @@ export interface BackgroundJobRecord {
   statusUncertain: boolean;
   cancellationRequested: boolean;
   terminalUnreconciled: boolean;
+  occurrenceID?: string;
   launchedAt: number;
   lastLaunchedAt: number;
   /** Monotonic run identity. Explicit relaunch/reuse increments it. */
@@ -116,6 +117,7 @@ export interface BackgroundJobLaunchInput {
 export interface BackgroundJobStatusInput {
   taskID: string;
   state: TaskOutputState;
+  occurrenceID?: string;
   /** Ignore native output from an older run of the same task ID. */
   expectedGeneration?: number;
   timedOut?: boolean;
@@ -280,6 +282,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
         statusUncertain: false,
         cancellationRequested: false,
         terminalUnreconciled: false,
+        occurrenceID: undefined,
         completedAt: undefined,
         resultSummary: undefined,
         lastStatusError: undefined,
@@ -383,6 +386,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
             : existing.recoverableAfterLiveBusy,
       statusUncertain: input.statusUncertain ?? false,
       terminalUnreconciled: terminal ? true : existing.terminalUnreconciled,
+      occurrenceID: input.occurrenceID ?? existing.occurrenceID,
       updatedAt: now,
       completedAt: terminal
         ? (existing.completedAt ?? now)

@@ -527,6 +527,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       getWorkIntent: (sessionID) => workIntentAdapter.get(sessionID),
       hasTerminalUnreconciled: (sessionID) =>
         backgroundJobCoordinator.hasTerminalUnreconciled(sessionID),
+      getJob: (taskID) => backgroundJobCoordinator.get(taskID),
+      isJobTerminalUnreconciled: (taskID) =>
+        backgroundJobCoordinator.isTerminalUnreconciled(taskID),
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       if (!record.terminalUnreconciled) return;
@@ -546,6 +549,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           {
             taskID: record.taskID,
             generation: record.generation,
+            occurrenceID: record.occurrenceID,
             state: record.state,
           },
         );
