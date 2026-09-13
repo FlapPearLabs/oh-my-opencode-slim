@@ -9,10 +9,14 @@ distinct wake purposes:
    Suppressed by missing/unknown/waiting_for_user/complete/blocked WorkIntent,
    or by unresolved canonical terminal reconciliation (`hasTerminalUnreconciled`).
 2. **Canonical terminal reconciliation wake**: Triggered by canonical child
-   terminal outcomes (`completed`, `error`, `cancelled`). Reconciles a specific
-   authoritative occurrence identity `(taskID, generation, occurrenceID)`.
-   Prompts the orchestrator solely to observe and consume the terminal result and
-   update authoritative state; does not authorize autonomous continuation.
+   terminal outcomes (`completed`, `error`, `cancelled`). Canonical reconciliation
+   wake requires: `completed/error/cancelled` + `terminalUnreconciled` + reliable
+   authoritative `occurrenceID`. Occurrence-less terminal records remain owned by
+   existing board/result consumption semantics and are NOT given a fabricated
+   result identity. Reconciles a specific authoritative occurrence identity
+   `(taskID, generation, occurrenceID)`. Prompts the orchestrator solely to observe
+   and consume the terminal result and update authoritative state; does not
+   authorize autonomous continuation.
 3. **Stopped job recovery wake**: Immediate recovery wake for jobs that stopped
    without a native canonical terminal result. Preserved as a separate path from
    both normal continuation and reconciliation wakes (not blocked by

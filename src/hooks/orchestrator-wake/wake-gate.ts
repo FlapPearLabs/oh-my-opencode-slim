@@ -244,3 +244,58 @@ export function clearAllWakeSessions(): void {
 export function resetOrchestratorWakeGateForTests(): void {
   clearAllWakeSessions();
 }
+
+export interface ReconciliationTarget {
+  taskID: string;
+  generation: number;
+  occurrenceID: string;
+  state?: 'completed' | 'error' | 'cancelled' | string;
+}
+
+/**
+ * Pure predicate/adapter converting a background job record into a canonical
+ * reconciliation target.
+ *
+ * Canonical reconciliation eligibility requires ALL:
+ * 1. canonical terminal state: 'completed' | 'error' | 'cancelled'
+ * 2. terminalUnreconciled === true
+ * 3. authoritative non-empty occurrenceID
+ *
+ * Returns ReconciliationTarget when eligible, or undefined if ineligible.
+ */
+export function toCanonicalReconciliationTarget(
+  record:
+    | {
+        taskID: string;
+        generation: number;
+        state?: string;
+        terminalUnreconciled?: boolean;
+        occurrenceID?: string;
+      }
+    | null
+    | undefined,
+): ReconciliationTarget | undefined {
+  if (!record) return undefined;
+  if (
+    record.state !== 'completed' &&
+    record.state !== 'error' &&
+    record.state !== 'cancelled'
+  ) {
+    return undefined;
+  }
+  if (record.terminalUnreconciled !== true) {
+    return undefined;
+  }
+  if (
+    typeof record.occurrenceID !== 'string' ||
+    record.occurrenceID.trim() === ''
+  ) {
+    return undefined;
+  }
+  return {
+    taskID: record.taskID,
+    generation: record.generation,
+    occurrenceID: record.occurrenceID,
+    state: record.state,
+  };
+}

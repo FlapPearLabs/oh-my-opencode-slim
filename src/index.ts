@@ -40,6 +40,7 @@ import {
   createUltraworkCommandHook,
   ForegroundFallbackManager,
   SessionLifecycle,
+  toCanonicalReconciliationTarget,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
 import { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
@@ -532,20 +533,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         backgroundJobCoordinator.isTerminalUnreconciled(taskID),
       resolveReconciliationTarget: (sessionID) => {
         const records = backgroundJobCoordinator.list(sessionID);
-        const candidate = records.find(
-          (r) =>
-            (r.state === 'completed' ||
-              r.state === 'error' ||
-              r.state === 'cancelled') &&
-            r.terminalUnreconciled,
-        );
-        if (!candidate) return undefined;
-        return {
-          taskID: candidate.taskID,
-          generation: candidate.generation,
-          occurrenceID: candidate.occurrenceID,
-          state: candidate.state,
-        };
+        for (const record of records) {
+          const target = toCanonicalReconciliationTarget(record);
+          if (target) return target;
+        }
+        return undefined;
       },
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
@@ -556,19 +548,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
         return;
       }
-      if (
-        record.state === 'completed' ||
-        record.state === 'error' ||
-        record.state === 'cancelled'
-      ) {
+      const target = toCanonicalReconciliationTarget(record);
+      if (target) {
         void orchestratorWakeScheduler.triggerReconciliationWake(
           record.parentSessionID,
-          {
-            taskID: record.taskID,
-            generation: record.generation,
-            occurrenceID: record.occurrenceID,
-            state: record.state,
-          },
+          target,
         );
       }
     });

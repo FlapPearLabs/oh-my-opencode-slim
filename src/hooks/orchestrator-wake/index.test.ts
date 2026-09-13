@@ -14,6 +14,7 @@ import {
 import {
   getWakeProgress,
   resetOrchestratorWakeGateForTests,
+  toCanonicalReconciliationTarget,
 } from './wake-gate';
 
 type SessionClient = {
@@ -1068,11 +1069,19 @@ describe('orchestrator wake scheduler', () => {
       const { scheduler } = createScheduler({
         sessionClient: makeClient({ promptAsync }),
         hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
       });
 
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
         generation: 1,
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
 
@@ -1088,6 +1097,13 @@ describe('orchestrator wake scheduler', () => {
       const { scheduler } = createScheduler({
         sessionClient: makeClient({ promptAsync }),
         hasTerminalUnreconciled: () => true,
+        getJob: () => ({
+          taskID: 'task-1',
+          generation: 1,
+          occurrenceID: 'occ-1',
+          terminalUnreconciled: true,
+          state: 'completed',
+        }),
       });
 
       // Normal idle would be blocked by hasTerminalUnreconciled
@@ -1101,6 +1117,7 @@ describe('orchestrator wake scheduler', () => {
       await (scheduler as any).triggerReconciliationWake('p1', {
         taskID: 'task-1',
         generation: 1,
+        occurrenceID: 'occ-1',
         state: 'completed',
       });
       expect(promptAsync).toHaveBeenCalledTimes(1);
@@ -1673,24 +1690,19 @@ describe('orchestrator wake scheduler', () => {
         },
       };
 
-      // Handler matching src/index.ts wiring
+      // Handler matching src/index.ts wiring using toCanonicalReconciliationTarget
       const listener = (record: any) => {
         if (!record.terminalUnreconciled) return;
         if (record.state === 'stopped') {
           fakeScheduler.triggerStoppedJobRecovery(record.parentSessionID);
           return;
         }
-        if (
-          record.state === 'completed' ||
-          record.state === 'error' ||
-          record.state === 'cancelled'
-        ) {
-          void fakeScheduler.triggerReconciliationWake(record.parentSessionID, {
-            taskID: record.taskID,
-            generation: record.generation,
-            occurrenceID: record.occurrenceID,
-            state: record.state,
-          });
+        const target = toCanonicalReconciliationTarget(record);
+        if (target) {
+          void fakeScheduler.triggerReconciliationWake(
+            record.parentSessionID,
+            target,
+          );
         }
       };
 

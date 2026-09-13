@@ -32,6 +32,7 @@ import {
   getWakeProgress,
   isExpectingWakeBusy,
   noteHostProgress,
+  type ReconciliationTarget,
   rearmWakeProgress,
   releaseWakeEvaluation,
   retryAfterWakeEvaluation,
@@ -107,12 +108,10 @@ export type OrchestratorWakeOptions = {
   ) => ReconciliationTarget | undefined;
 };
 
-export interface ReconciliationTarget {
-  taskID: string;
-  generation: number;
-  occurrenceID?: string;
-  state?: string;
-}
+export {
+  type ReconciliationTarget,
+  toCanonicalReconciliationTarget,
+} from './wake-gate';
 
 function hasRequiredSessionApis(
   session: SessionClient | undefined,
@@ -758,11 +757,14 @@ export function createOrchestratorWakeScheduler(
 
     function revalidateTarget(t: ReconciliationTarget): boolean {
       if (
-        t.state &&
+        t.state !== undefined &&
         t.state !== 'completed' &&
         t.state !== 'error' &&
         t.state !== 'cancelled'
       ) {
+        return false;
+      }
+      if (typeof t.occurrenceID !== 'string' || t.occurrenceID.trim() === '') {
         return false;
       }
       if (options.isJobTerminalUnreconciled?.(t.taskID) === false) {
@@ -772,24 +774,29 @@ export function createOrchestratorWakeScheduler(
         options.getJob ??
         (options as { getJobRecord?: typeof options.getJob }).getJobRecord
       )?.(t.taskID);
-      if (currentJob) {
-        if (currentJob.generation !== t.generation) return false;
-        if (!currentJob.terminalUnreconciled) return false;
-        if (
-          t.occurrenceID !== undefined &&
-          currentJob.occurrenceID !== undefined &&
-          t.occurrenceID !== currentJob.occurrenceID
-        ) {
-          return false;
-        }
-        if (
-          currentJob.state !== undefined &&
-          currentJob.state !== 'completed' &&
-          currentJob.state !== 'error' &&
-          currentJob.state !== 'cancelled'
-        ) {
-          return false;
-        }
+      if (!currentJob) {
+        return false;
+      }
+      if (currentJob.generation !== t.generation) return false;
+      if (!currentJob.terminalUnreconciled) return false;
+      if (
+        typeof currentJob.occurrenceID !== 'string' ||
+        currentJob.occurrenceID.trim() === ''
+      ) {
+        return false;
+      }
+      if (t.occurrenceID !== currentJob.occurrenceID) {
+        return false;
+      }
+      if (
+        currentJob.state !== 'completed' &&
+        currentJob.state !== 'error' &&
+        currentJob.state !== 'cancelled'
+      ) {
+        return false;
+      }
+      if (t.state !== undefined && t.state !== currentJob.state) {
+        return false;
       }
       return true;
     }
@@ -818,12 +825,10 @@ export function createOrchestratorWakeScheduler(
       return;
     }
 
-    const fingerprint = resolvedTarget
-      ? `reconciliation:${resolvedTarget.taskID}:${resolvedTarget.generation}:${resolvedTarget.occurrenceID ?? 'none'}`
-      : `reconciliation:${sessionID}`;
+    const fingerprint = `reconciliation:${resolvedTarget.taskID}:${resolvedTarget.generation}:${resolvedTarget.occurrenceID}`;
 
     const progress = getWakeProgress(sessionID);
-    if (resolvedTarget && progress.lastFingerprint === fingerprint) {
+    if (progress.lastFingerprint === fingerprint) {
       releaseWakeEvaluation(sessionID, owner);
       return;
     }
