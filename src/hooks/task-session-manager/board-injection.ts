@@ -331,13 +331,14 @@ function isProcessableSyntheticTerminal(
 function observationOccurrenceID(
   part: MessagePart,
   status: TaskStatusOutput,
+  message?: MessageWithParts,
 ): { occurrenceID: string; reliable: boolean } {
   const explicitOccurrenceID = getExplicitOccurrenceID(part);
   if (explicitOccurrenceID) {
     return { occurrenceID: explicitOccurrenceID, reliable: true };
   }
 
-  const messageID = getHostMessageID(part);
+  const messageID = getCanonicalHostMessageID(part, message);
   if (messageID) {
     return {
       occurrenceID: hostMessageOccurrenceID(
@@ -732,6 +733,7 @@ export function updateFromInjectedCompletion(
   const occurrenceId = createOccurrenceId(part, message, partIndex);
   const provenanceKind = provenanceKindForPart(part, message);
   const hasExplicitOccurrenceID = provenanceKind === 'explicit';
+  const observation = observationOccurrenceID(part, status, message);
 
   const existing = state.backgroundJobBoard.get(status.taskID);
   const deletionEpoch = state.getDeletionEpoch?.(status.taskID);
@@ -903,10 +905,18 @@ export function updateFromInjectedCompletion(
     return undefined;
   }
 
+  const occurrenceToPass = observation.reliable
+    ? observation.occurrenceID
+    : undefined;
+
   const updated = updateBackgroundJobFromOutput(
     part.text,
     state.backgroundJobBoard,
     state.taskContextTracker,
+    {
+      expectedGeneration: existing?.generation,
+      occurrenceID: occurrenceToPass,
+    },
   );
   if (!updated) return undefined;
 

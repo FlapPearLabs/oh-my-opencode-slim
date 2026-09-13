@@ -530,6 +530,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       getJob: (taskID) => backgroundJobCoordinator.get(taskID),
       isJobTerminalUnreconciled: (taskID) =>
         backgroundJobCoordinator.isTerminalUnreconciled(taskID),
+      resolveReconciliationTarget: (sessionID) => {
+        const records = backgroundJobCoordinator.list(sessionID);
+        const candidate = records.find(
+          (r) =>
+            (r.state === 'completed' ||
+              r.state === 'error' ||
+              r.state === 'cancelled') &&
+            r.terminalUnreconciled,
+        );
+        if (!candidate) return undefined;
+        return {
+          taskID: candidate.taskID,
+          generation: candidate.generation,
+          occurrenceID: candidate.occurrenceID,
+          state: candidate.state,
+        };
+      },
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       if (!record.terminalUnreconciled) return;

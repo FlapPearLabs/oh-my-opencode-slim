@@ -41,7 +41,10 @@ secondary wake ledgers exist.
     occurrence `(taskID, generation, occurrenceID)`, revalidates all guards after
     the async host snapshot, and dispatches `ORCHESTRATOR_RECONCILIATION_WAKE_TEXT`
     narrowly instructing the orchestrator to consume the result without granting
-    continuation authority.
+    continuation authority. If called without a target (e.g. from idle lifecycle
+    or one-flight pending drain), resolves the authoritative target from board/coordinator
+    state before dispatch. Fingerprint does not permanently suppress unreconciled results,
+    which redrive when parent becomes idle until authoritative consumption occurs.
   - `triggerStoppedJobRecovery`: immediate recovery wake for jobs that stopped
     without a native terminal result (separate from the periodic TODO wake).
   - `observeChatMessage`: real external user activity rearms the no-progress
@@ -86,7 +89,7 @@ busy (external) / errors / user activity → rearm cap
   job-stopped recovery triggers (`triggerStoppedJobRecovery`) to it;
   config comes from `runtime.backgroundJobs.orchestratorWake` (`{ enabled, intervalMs }`).
 - **BackgroundJobCoordinator seams**: supplies `hasTerminalUnreconciled`,
-  `getJob`, `isJobTerminalUnreconciled`, and terminal outcome listeners
+  `getJob`, `isJobTerminalUnreconciled`, `resolveReconciliationTarget`, and terminal outcome listeners
   propagating `(taskID, generation, occurrenceID, state)`.
 - **WorkIntent seams**: supplies `getWorkIntent` for verifying `state === 'active'`
   on normal continuation wakes.

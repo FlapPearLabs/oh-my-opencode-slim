@@ -50,6 +50,10 @@ export function updateBackgroundJobFromOutput(
     contextFilesForPrompt(taskId: string): ContextFile[];
     prune(board: { taskIDs(): Set<string> }): void;
   },
+  options?: {
+    expectedGeneration?: number;
+    occurrenceID?: string;
+  },
 ): BackgroundJobRecord | undefined {
   if (typeof output !== 'string') return undefined;
 
@@ -85,6 +89,8 @@ export function updateBackgroundJobFromOutput(
   const updated = backgroundJobBoard.updateStatus({
     taskID: status.taskID,
     state: guarded.state,
+    expectedGeneration: options?.expectedGeneration,
+    occurrenceID: options?.occurrenceID,
     timedOut: status.timedOut,
     resultSummary: guarded.resultSummary,
     lastStatusError: guarded.lastStatusError,

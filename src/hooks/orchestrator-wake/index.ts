@@ -26,6 +26,7 @@ import { isActiveStatus } from '../task-session-manager/status-utils';
 import {
   clearExpectingWakeBusy,
   clearWakeSession,
+  commitReconciliationWakeReservation,
   commitWakeReservation,
   getObservedWakeModel,
   getWakeProgress,
@@ -100,6 +101,10 @@ export type OrchestratorWakeOptions = {
     | undefined;
   /** Query whether specific job is currently terminal-unreconciled. */
   isJobTerminalUnreconciled?: (taskID: string) => boolean;
+  /** Authoritative target resolution for targetless redrive or lifecycle reconciliation re-evaluation. */
+  resolveReconciliationTarget?: (
+    sessionID: string,
+  ) => ReconciliationTarget | undefined;
 };
 
 export interface ReconciliationTarget {
@@ -743,30 +748,54 @@ export function createOrchestratorWakeScheduler(
       return;
     }
 
-    if (target) {
+    let resolvedTarget = target;
+    if (!resolvedTarget && options.resolveReconciliationTarget) {
+      resolvedTarget = options.resolveReconciliationTarget(sessionID);
+    }
+    if (!resolvedTarget) {
+      return;
+    }
+
+    function revalidateTarget(t: ReconciliationTarget): boolean {
       if (
-        target.state &&
-        target.state !== 'completed' &&
-        target.state !== 'error' &&
-        target.state !== 'cancelled'
+        t.state &&
+        t.state !== 'completed' &&
+        t.state !== 'error' &&
+        t.state !== 'cancelled'
       ) {
-        return;
+        return false;
       }
-      if (options.isJobTerminalUnreconciled?.(target.taskID) === false) {
-        return;
+      if (options.isJobTerminalUnreconciled?.(t.taskID) === false) {
+        return false;
       }
-      const currentJob = options.getJob?.(target.taskID);
+      const currentJob = (
+        options.getJob ??
+        (options as { getJobRecord?: typeof options.getJob }).getJobRecord
+      )?.(t.taskID);
       if (currentJob) {
-        if (currentJob.generation !== target.generation) return;
-        if (!currentJob.terminalUnreconciled) return;
+        if (currentJob.generation !== t.generation) return false;
+        if (!currentJob.terminalUnreconciled) return false;
         if (
-          target.occurrenceID &&
-          currentJob.occurrenceID &&
-          target.occurrenceID !== currentJob.occurrenceID
+          t.occurrenceID !== undefined &&
+          currentJob.occurrenceID !== undefined &&
+          t.occurrenceID !== currentJob.occurrenceID
         ) {
-          return;
+          return false;
+        }
+        if (
+          currentJob.state !== undefined &&
+          currentJob.state !== 'completed' &&
+          currentJob.state !== 'error' &&
+          currentJob.state !== 'cancelled'
+        ) {
+          return false;
         }
       }
+      return true;
+    }
+
+    if (!revalidateTarget(resolvedTarget)) {
+      return;
     }
 
     if (
@@ -778,8 +807,7 @@ export function createOrchestratorWakeScheduler(
 
     if (
       options.hasInputWait(sessionID) ||
-      options.isFallbackInProgress?.(sessionID) ||
-      getWakeProgress(sessionID).stopped
+      options.isFallbackInProgress?.(sessionID)
     ) {
       return;
     }
@@ -790,12 +818,20 @@ export function createOrchestratorWakeScheduler(
       return;
     }
 
-    let committedFingerprint: string | undefined;
+    const fingerprint = resolvedTarget
+      ? `reconciliation:${resolvedTarget.taskID}:${resolvedTarget.generation}:${resolvedTarget.occurrenceID ?? 'none'}`
+      : `reconciliation:${sessionID}`;
+
+    const progress = getWakeProgress(sessionID);
+    if (resolvedTarget && progress.lastFingerprint === fingerprint) {
+      releaseWakeEvaluation(sessionID, owner);
+      return;
+    }
+
     try {
       if (
         options.hasInputWait(sessionID) ||
-        options.isFallbackInProgress?.(sessionID) ||
-        getWakeProgress(sessionID).stopped
+        options.isFallbackInProgress?.(sessionID)
       ) {
         return;
       }
@@ -815,27 +851,12 @@ export function createOrchestratorWakeScheduler(
       }
       if (
         options.hasInputWait(sessionID) ||
-        options.isFallbackInProgress?.(sessionID) ||
-        getWakeProgress(sessionID).stopped
+        options.isFallbackInProgress?.(sessionID)
       ) {
         return;
       }
-      if (target) {
-        if (options.isJobTerminalUnreconciled?.(target.taskID) === false) {
-          return;
-        }
-        const currentJob = options.getJob?.(target.taskID);
-        if (currentJob) {
-          if (currentJob.generation !== target.generation) return;
-          if (!currentJob.terminalUnreconciled) return;
-          if (
-            target.occurrenceID &&
-            currentJob.occurrenceID &&
-            target.occurrenceID !== currentJob.occurrenceID
-          ) {
-            return;
-          }
-        }
+      if (!revalidateTarget(resolvedTarget)) {
+        return;
       }
       if (
         options.hasTerminalUnreconciled &&
@@ -844,24 +865,10 @@ export function createOrchestratorWakeScheduler(
         return;
       }
 
-      const baseFingerprint = buildOrchestratorWakeFingerprint(
-        snapshot.todos,
-        snapshot.children,
-        snapshot.status,
-      );
-      const fingerprint = target
-        ? `${baseFingerprint}:rec:${target.taskID}:${target.generation}:${target.occurrenceID ?? ''}`
-        : `${baseFingerprint}:rec`;
-
-      const progress = getWakeProgress(sessionID);
-      if (target && progress.lastFingerprint === fingerprint) {
+      if (!commitReconciliationWakeReservation(sessionID, owner)) {
         return;
       }
-
-      if (!commitWakeReservation(sessionID, owner, fingerprint)) {
-        return;
-      }
-      committedFingerprint = fingerprint;
+      progress.lastFingerprint = fingerprint;
 
       const modelSelection = snapshot.model ?? getObservedWakeModel(sessionID);
 
@@ -879,16 +886,8 @@ export function createOrchestratorWakeScheduler(
       });
     } catch (error) {
       clearExpectingWakeBusy(sessionID);
-      if (committedFingerprint) {
-        const progress = getWakeProgress(sessionID);
-        if (progress.lastFingerprint === committedFingerprint) {
-          progress.lastFingerprint = undefined;
-          progress.unchangedWakeCount = Math.max(
-            0,
-            progress.unchangedWakeCount - 1,
-          );
-        }
-      }
+      const progress = getWakeProgress(sessionID);
+      progress.lastFingerprint = undefined;
       log('[orchestrator-wake] reconciliation wake error', {
         sessionID,
         error: error instanceof Error ? error.message : String(error),
@@ -896,6 +895,7 @@ export function createOrchestratorWakeScheduler(
     } finally {
       releaseWakeEvaluation(sessionID, owner);
       if (pendingReconciliationWakeSessions.delete(sessionID)) {
+        getWakeProgress(sessionID).lastFingerprint = undefined;
         void triggerReconciliationWake(sessionID);
       }
     }
@@ -945,6 +945,11 @@ export function createOrchestratorWakeScheduler(
         clearExpectingWakeBusy(sessionID);
         if (pendingStoppedRecoveries.has(sessionID)) {
           triggerStoppedJobRecovery(sessionID);
+          return;
+        }
+        if (options.hasTerminalUnreconciled?.(sessionID)) {
+          getWakeProgress(sessionID).lastFingerprint = undefined;
+          await triggerReconciliationWake(sessionID);
           return;
         }
         beginContinuousIdle(sessionID);

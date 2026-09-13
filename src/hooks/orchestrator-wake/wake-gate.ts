@@ -156,6 +156,25 @@ export function commitWakeReservation(
   return true;
 }
 
+/**
+ * Commit a wake evaluation flight specifically for reconciliation wake.
+ * Marks flight committed and arms expectingWakeBusy without mutating continuous-idle
+ * fingerprint, unchangedWakeCount, or stopped status.
+ */
+export function commitReconciliationWakeReservation(
+  sessionID: string,
+  owner: symbol,
+): boolean {
+  const store = getStore();
+  const flight = store.inFlight.get(sessionID);
+  if (flight?.owner !== owner) return false;
+  flight.wakeCommitted = true;
+
+  const progress = getWakeProgress(sessionID);
+  progress.expectingWakeBusy = true;
+  return true;
+}
+
 /** Host fingerprint changed: reset the two-wake no-progress cap. */
 export function noteHostProgress(sessionID: string, fingerprint: string): void {
   const progress = getWakeProgress(sessionID);

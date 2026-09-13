@@ -372,8 +372,12 @@ export class BackgroundJobBoard implements BackgroundJobStore {
 
     const now = input.now ?? Date.now();
     const terminal = input.state !== 'running';
+    const occurrenceChanged =
+      input.occurrenceID !== undefined &&
+      input.occurrenceID !== existing.occurrenceID;
     const notifyTerminal =
-      terminal && !isCanonicalTerminalState(existing.state);
+      terminal &&
+      (!isCanonicalTerminalState(existing.state) || occurrenceChanged);
     const updated: BackgroundJobRecord = {
       ...existing,
       state: input.state,
@@ -385,8 +389,22 @@ export class BackgroundJobBoard implements BackgroundJobStore {
             ? false
             : existing.recoverableAfterLiveBusy,
       statusUncertain: input.statusUncertain ?? false,
-      terminalUnreconciled: terminal ? true : existing.terminalUnreconciled,
-      occurrenceID: input.occurrenceID ?? existing.occurrenceID,
+      terminalUnreconciled:
+        input.state === 'running'
+          ? false
+          : occurrenceChanged
+            ? true
+            : terminal
+              ? isCanonicalTerminalState(existing.state)
+                ? existing.terminalUnreconciled
+                : true
+              : existing.terminalUnreconciled,
+      occurrenceID:
+        input.state === 'running'
+          ? undefined
+          : input.occurrenceID !== undefined
+            ? input.occurrenceID
+            : existing.occurrenceID,
       updatedAt: now,
       completedAt: terminal
         ? (existing.completedAt ?? now)
@@ -1244,7 +1262,7 @@ function terminalStateOf(
     : undefined;
 }
 
-function isCanonicalTerminalState(
+export function isCanonicalTerminalState(
   state: BackgroundJobState,
 ): state is TaskOutputState {
   return CANONICAL_TERMINAL_STATES.has(state as TaskOutputState);

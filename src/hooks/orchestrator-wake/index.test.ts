@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createInternalAgentTextPart } from '../../utils';
+import { isCanonicalTerminalState } from '../../utils/background-job-board';
 import { SessionLifecycle } from '../session-lifecycle';
 import { resetUserWaitGateForTests } from '../task-session-manager/user-wait-gate';
 import {
@@ -1788,6 +1789,568 @@ describe('orchestrator wake scheduler', () => {
         terminalUnreconciled: false,
       });
       expect(calls).toEqual([]);
+    });
+  });
+
+  describe('URV1-03 Repair V3: P1-B and P1-C Authoritative Redrive & Consumption Semantics', () => {
+    test('P1-B: parent busy at terminal arrival -> later parent idle lifecycle event re-evaluates authoritative unreconciled state -> dispatches wake', async () => {
+      let isBusy = true;
+      let promptCallCount = 0;
+      let promptParts: unknown[] = [];
+      const records = new Map<string, BackgroundJobRecord>();
+      records.set('job-1', {
+        taskID: 'job-1',
+        parentSessionID: 'parent-busy',
+        generation: 1,
+        occurrenceID: 'occ-1',
+        state: 'completed',
+        terminalUnreconciled: true,
+        launchedAt: 100,
+      } as BackgroundJobRecord);
+
+      const client = {
+        session: {
+          get: mock(async () => ({ data: { id: 'mock-session' } })),
+          todo: mock(async () => ({ data: [] })),
+          children: mock(async () => ({ data: [] })),
+          promptAsync: mock(async (req: { body: { parts: unknown[] } }) => {
+            promptCallCount++;
+            promptParts = req.body.parts;
+          }),
+          status: mock(async () => ({
+            data: isBusy ? { 'parent-busy': { type: 'busy' } } : {},
+          })),
+        },
+      };
+
+      const scheduler = createOrchestratorWakeScheduler(
+        { client: client as never } as never,
+        {
+          config: { enabled: true, intervalMs: 60_000 },
+          shouldManageSession: (id: string) => id === 'parent-busy',
+          isSessionBusy: () => isBusy,
+          hasInputWait: () => false,
+          isFallbackInProgress: () => false,
+          hasTerminalUnreconciled: (id: string) => {
+            if (id !== 'parent-busy') return false;
+            return Array.from(records.values()).some(
+              (r) => r.parentSessionID === id && r.terminalUnreconciled,
+            );
+          },
+          getJobRecord: (id: string) => records.get(id),
+          resolveReconciliationTarget: (id: string) => {
+            const matching = Array.from(records.values())
+              .filter(
+                (r) =>
+                  r.parentSessionID === id &&
+                  r.terminalUnreconciled &&
+                  isCanonicalTerminalState(r.state),
+              )
+              .sort((a, b) => a.launchedAt - b.launchedAt);
+            if (matching.length === 0) return undefined;
+            return {
+              taskID: matching[0].taskID,
+              generation: matching[0].generation,
+              occurrenceID: matching[0].occurrenceID,
+            };
+          },
+        } as never,
+      );
+
+      // Terminal arrives while parent is busy
+      await scheduler.triggerReconciliationWake('parent-busy', {
+        taskID: 'job-1',
+        generation: 1,
+        occurrenceID: 'occ-1',
+      });
+      // Initial arrival while busy MUST NOT dispatch prompt
+      expect(promptCallCount).toBe(0);
+
+      // Parent finishes turn and becomes idle
+      isBusy = false;
+      await scheduler.event({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'parent-busy' },
+        },
+      });
+
+      // After idle event, authoritative unreconciled state must be re-evaluated and dispatched
+      expect(promptCallCount).toBe(1);
+      expect((promptParts[0] as { text: string }).text).toContain(
+        ORCHESTRATOR_RECONCILIATION_WAKE_TEXT,
+      );
+    });
+
+    test('P1-B: user wait active at arrival -> wait clears -> dispatches wake', async () => {
+      let hasWait = true;
+      let promptCallCount = 0;
+      const records = new Map<string, BackgroundJobRecord>();
+      records.set('job-wait', {
+        taskID: 'job-wait',
+        parentSessionID: 'parent-wait',
+        generation: 1,
+        occurrenceID: 'occ-wait-1',
+        state: 'completed',
+        terminalUnreconciled: true,
+        launchedAt: 100,
+      } as BackgroundJobRecord);
+
+      const client = {
+        session: {
+          get: mock(async () => ({ data: { id: 'mock-session' } })),
+          todo: mock(async () => ({ data: [] })),
+          children: mock(async () => ({ data: [] })),
+          promptAsync: mock(async () => {
+            promptCallCount++;
+          }),
+          status: mock(async () => ({
+            data: {},
+          })),
+        },
+      };
+
+      const scheduler = createOrchestratorWakeScheduler(
+        { client: client as never } as never,
+        {
+          config: { enabled: true, intervalMs: 60_000 },
+          shouldManageSession: (id: string) => id === 'parent-wait',
+          isSessionBusy: () => false,
+          hasInputWait: () => hasWait,
+          isFallbackInProgress: () => false,
+          hasTerminalUnreconciled: (id: string) => {
+            if (id !== 'parent-wait') return false;
+            return Array.from(records.values()).some(
+              (r) => r.parentSessionID === id && r.terminalUnreconciled,
+            );
+          },
+          getJobRecord: (id: string) => records.get(id),
+          resolveReconciliationTarget: (id: string) => {
+            const matching = Array.from(records.values()).filter(
+              (r) =>
+                r.parentSessionID === id &&
+                r.terminalUnreconciled &&
+                isCanonicalTerminalState(r.state),
+            );
+            if (matching.length === 0) return undefined;
+            return {
+              taskID: matching[0].taskID,
+              generation: matching[0].generation,
+              occurrenceID: matching[0].occurrenceID,
+            };
+          },
+        } as never,
+      );
+
+      // Terminal arrives while wait active
+      await scheduler.triggerReconciliationWake('parent-wait', {
+        taskID: 'job-wait',
+        generation: 1,
+        occurrenceID: 'occ-wait-1',
+      });
+      expect(promptCallCount).toBe(0);
+
+      // Wait clears and idle lifecycle event occurs
+      hasWait = false;
+      await scheduler.event({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'parent-wait' },
+        },
+      });
+
+      expect(promptCallCount).toBe(1);
+    });
+
+    test('P1-B: fallback active at arrival -> fallback ends -> dispatches wake', async () => {
+      let isFallback = true;
+      let promptCallCount = 0;
+      const records = new Map<string, BackgroundJobRecord>();
+      records.set('job-fb', {
+        taskID: 'job-fb',
+        parentSessionID: 'parent-fb',
+        generation: 1,
+        occurrenceID: 'occ-fb-1',
+        state: 'error',
+        terminalUnreconciled: true,
+        launchedAt: 100,
+      } as BackgroundJobRecord);
+
+      const client = {
+        session: {
+          get: mock(async () => ({ data: { id: 'mock-session' } })),
+          todo: mock(async () => ({ data: [] })),
+          children: mock(async () => ({ data: [] })),
+          promptAsync: mock(async () => {
+            promptCallCount++;
+          }),
+          status: mock(async () => ({
+            data: {},
+          })),
+        },
+      };
+
+      const scheduler = createOrchestratorWakeScheduler(
+        { client: client as never } as never,
+        {
+          config: { enabled: true, intervalMs: 60_000 },
+          shouldManageSession: (id: string) => id === 'parent-fb',
+          isSessionBusy: () => false,
+          hasInputWait: () => false,
+          isFallbackInProgress: () => isFallback,
+          hasTerminalUnreconciled: (id: string) => {
+            if (id !== 'parent-fb') return false;
+            return Array.from(records.values()).some(
+              (r) => r.parentSessionID === id && r.terminalUnreconciled,
+            );
+          },
+          getJobRecord: (id: string) => records.get(id),
+          resolveReconciliationTarget: (id: string) => {
+            const matching = Array.from(records.values()).filter(
+              (r) =>
+                r.parentSessionID === id &&
+                r.terminalUnreconciled &&
+                isCanonicalTerminalState(r.state),
+            );
+            if (matching.length === 0) return undefined;
+            return {
+              taskID: matching[0].taskID,
+              generation: matching[0].generation,
+              occurrenceID: matching[0].occurrenceID,
+            };
+          },
+        } as never,
+      );
+
+      // Terminal arrives while fallback active
+      await scheduler.triggerReconciliationWake('parent-fb', {
+        taskID: 'job-fb',
+        generation: 1,
+        occurrenceID: 'occ-fb-1',
+      });
+      expect(promptCallCount).toBe(0);
+
+      // Fallback ends and idle event occurs
+      isFallback = false;
+      await scheduler.event({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'parent-fb' },
+        },
+      });
+
+      expect(promptCallCount).toBe(1);
+    });
+
+    test('P1-C: prompt succeeds but job remains unreconciled -> redrives on subsequent idle event (fingerprint does not permanently suppress)', async () => {
+      let promptCallCount = 0;
+      const records = new Map<string, BackgroundJobRecord>();
+      const job: BackgroundJobRecord = {
+        taskID: 'job-p1c',
+        parentSessionID: 'parent-p1c',
+        generation: 1,
+        occurrenceID: 'occ-p1c-1',
+        state: 'completed',
+        terminalUnreconciled: true,
+        launchedAt: 100,
+      } as BackgroundJobRecord;
+      records.set('job-p1c', job);
+
+      const client = {
+        session: {
+          get: mock(async () => ({ data: { id: 'mock-session' } })),
+          todo: mock(async () => ({ data: [] })),
+          children: mock(async () => ({ data: [] })),
+          promptAsync: mock(async () => {
+            promptCallCount++;
+          }),
+          status: mock(async () => ({
+            data: {},
+          })),
+        },
+      };
+
+      const scheduler = createOrchestratorWakeScheduler(
+        { client: client as never } as never,
+        {
+          config: { enabled: true, intervalMs: 60_000 },
+          shouldManageSession: (id: string) => id === 'parent-p1c',
+          isSessionBusy: () => false,
+          hasInputWait: () => false,
+          isFallbackInProgress: () => false,
+          hasTerminalUnreconciled: (id: string) => {
+            if (id !== 'parent-p1c') return false;
+            return Array.from(records.values()).some(
+              (r) => r.parentSessionID === id && r.terminalUnreconciled,
+            );
+          },
+          getJobRecord: (id: string) => records.get(id),
+          resolveReconciliationTarget: (id: string) => {
+            const matching = Array.from(records.values()).filter(
+              (r) =>
+                r.parentSessionID === id &&
+                r.terminalUnreconciled &&
+                isCanonicalTerminalState(r.state),
+            );
+            if (matching.length === 0) return undefined;
+            return {
+              taskID: matching[0].taskID,
+              generation: matching[0].generation,
+              occurrenceID: matching[0].occurrenceID,
+            };
+          },
+        } as never,
+      );
+
+      // 1. Initial wake dispatch
+      await scheduler.triggerReconciliationWake('parent-p1c', {
+        taskID: 'job-p1c',
+        generation: 1,
+        occurrenceID: 'occ-p1c-1',
+      });
+      expect(promptCallCount).toBe(1);
+
+      // 2. Parent turn ended without reconciling the job (job remains terminalUnreconciled === true)
+      // On V2, this subsequent idle event was permanently suppressed by progress.lastFingerprint === fingerprint!
+      await scheduler.event({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'parent-p1c' },
+        },
+      });
+
+      // Because job is STILL unreconciled on the board, reconciliation must redrive!
+      expect(promptCallCount).toBe(2);
+
+      // 3. Now parent reconciles the job (terminalUnreconciled becomes false)
+      job.terminalUnreconciled = false;
+
+      // 4. Future idle event must observe reconciled state and STOP
+      await scheduler.event({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'parent-p1c' },
+        },
+      });
+      expect(promptCallCount).toBe(2);
+    });
+
+    test('one-flight target loss: one-flight collision drains targetless pending and resolves authoritative target and validates exact identity', async () => {
+      let promptCallCount = 0;
+      const records = new Map<string, BackgroundJobRecord>();
+      const job: BackgroundJobRecord = {
+        taskID: 'job-flight',
+        parentSessionID: 'parent-flight',
+        generation: 1,
+        occurrenceID: 'occ-flight-1',
+        state: 'completed',
+        terminalUnreconciled: true,
+        launchedAt: 100,
+      } as BackgroundJobRecord;
+      records.set('job-flight', job);
+
+      let resolvePromptPromise: () => void;
+      const promptPromise = new Promise<void>((resolve) => {
+        resolvePromptPromise = resolve;
+      });
+      let promptReachedResolve: () => void;
+      const promptReached = new Promise<void>((resolve) => {
+        promptReachedResolve = resolve;
+      });
+
+      const client = {
+        session: {
+          get: mock(async () => ({ data: { id: 'mock-session' } })),
+          todo: mock(async () => ({ data: [] })),
+          children: mock(async () => ({ data: [] })),
+          promptAsync: mock(async () => {
+            promptCallCount++;
+            if (promptCallCount === 1) {
+              promptReachedResolve();
+              await promptPromise;
+            }
+          }),
+          status: mock(async () => ({
+            data: {},
+          })),
+        },
+      };
+
+      let resolvedTargetCount = 0;
+      const scheduler = createOrchestratorWakeScheduler(
+        { client: client as never } as never,
+        {
+          config: { enabled: true, intervalMs: 60_000 },
+          shouldManageSession: (id: string) => id === 'parent-flight',
+          isSessionBusy: () => false,
+          hasInputWait: () => false,
+          isFallbackInProgress: () => false,
+          hasTerminalUnreconciled: (id: string) => {
+            if (id !== 'parent-flight') return false;
+            return Array.from(records.values()).some(
+              (r) => r.parentSessionID === id && r.terminalUnreconciled,
+            );
+          },
+          getJobRecord: (id: string) => records.get(id),
+          resolveReconciliationTarget: (id: string) => {
+            resolvedTargetCount++;
+            const matching = Array.from(records.values()).filter(
+              (r) =>
+                r.parentSessionID === id &&
+                r.terminalUnreconciled &&
+                isCanonicalTerminalState(r.state),
+            );
+            if (matching.length === 0) return undefined;
+            return {
+              taskID: matching[0].taskID,
+              generation: matching[0].generation,
+              occurrenceID: matching[0].occurrenceID,
+            };
+          },
+        } as never,
+      );
+
+      // First call initiates promptAsync (blocked on promptPromise)
+      const firstFlight = scheduler.triggerReconciliationWake('parent-flight', {
+        taskID: 'job-flight',
+        generation: 1,
+        occurrenceID: 'occ-flight-1',
+      });
+
+      // Wait until first flight actually reaches promptAsync
+      await promptReached;
+
+      // Second call arrives while first is in-flight -> hits one-flight pending collision
+      await scheduler.triggerReconciliationWake('parent-flight', {
+        taskID: 'job-flight',
+        generation: 1,
+        occurrenceID: 'occ-flight-1',
+      });
+
+      expect(promptCallCount).toBe(1);
+
+      // Now release first prompt
+      resolvePromptPromise?.();
+      await firstFlight;
+
+      // Allow pending drain to execute
+      await Promise.resolve();
+      await clock.advance(10);
+
+      // In V3, targetless pending drain resolves target from board and validates identity
+      expect(resolvedTargetCount).toBeGreaterThan(0);
+    });
+
+    test('multiple results: two outstanding canonical unreconciled children are resolved and reconciled sequentially', async () => {
+      let promptCallCount = 0;
+      const promptedTasks: string[] = [];
+      const records = new Map<string, BackgroundJobRecord>();
+
+      const jobA: BackgroundJobRecord = {
+        taskID: 'task-A',
+        parentSessionID: 'parent-multi',
+        generation: 1,
+        occurrenceID: 'occ-A',
+        state: 'completed',
+        terminalUnreconciled: true,
+        launchedAt: 100,
+      } as BackgroundJobRecord;
+
+      const jobB: BackgroundJobRecord = {
+        taskID: 'task-B',
+        parentSessionID: 'parent-multi',
+        generation: 1,
+        occurrenceID: 'occ-B',
+        state: 'error',
+        terminalUnreconciled: true,
+        launchedAt: 200,
+      } as BackgroundJobRecord;
+
+      records.set('task-A', jobA);
+      records.set('task-B', jobB);
+
+      const client = {
+        session: {
+          get: mock(async () => ({ data: { id: 'mock-session' } })),
+          todo: mock(async () => ({ data: [] })),
+          children: mock(async () => ({ data: [] })),
+          promptAsync: mock(async () => {
+            promptCallCount++;
+          }),
+          status: mock(async () => ({
+            data: {},
+          })),
+        },
+      };
+
+      const scheduler = createOrchestratorWakeScheduler(
+        { client: client as never } as never,
+        {
+          config: { enabled: true, intervalMs: 60_000 },
+          shouldManageSession: (id: string) => id === 'parent-multi',
+          isSessionBusy: () => false,
+          hasInputWait: () => false,
+          isFallbackInProgress: () => false,
+          hasTerminalUnreconciled: (id: string) => {
+            if (id !== 'parent-multi') return false;
+            return Array.from(records.values()).some(
+              (r) => r.parentSessionID === id && r.terminalUnreconciled,
+            );
+          },
+          getJobRecord: (id: string) => records.get(id),
+          resolveReconciliationTarget: (id: string) => {
+            const matching = Array.from(records.values())
+              .filter(
+                (r) =>
+                  r.parentSessionID === id &&
+                  r.terminalUnreconciled &&
+                  isCanonicalTerminalState(r.state),
+              )
+              .sort(
+                (a, b) =>
+                  a.launchedAt - b.launchedAt ||
+                  a.taskID.localeCompare(b.taskID),
+              );
+            if (matching.length === 0) return undefined;
+            promptedTasks.push(matching[0].taskID);
+            return {
+              taskID: matching[0].taskID,
+              generation: matching[0].generation,
+              occurrenceID: matching[0].occurrenceID,
+            };
+          },
+        } as never,
+      );
+
+      // 1. Initial wake triggers for task-A (or targetless)
+      await scheduler.triggerReconciliationWake('parent-multi');
+      expect(promptCallCount).toBe(1);
+      expect(promptedTasks).toEqual(['task-A']);
+
+      // 2. Parent reconciles task-A
+      jobA.terminalUnreconciled = false;
+
+      // 3. Parent becomes idle -> task-B is discovered and dispatched!
+      await scheduler.event({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'parent-multi' },
+        },
+      });
+      expect(promptCallCount).toBe(2);
+      expect(promptedTasks).toEqual(['task-A', 'task-B']);
+
+      // 4. Parent reconciles task-B
+      jobB.terminalUnreconciled = false;
+
+      // 5. Subsequent idle event -> nothing left unreconciled, stops
+      await scheduler.event({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'parent-multi' },
+        },
+      });
+      expect(promptCallCount).toBe(2);
     });
   });
 });
